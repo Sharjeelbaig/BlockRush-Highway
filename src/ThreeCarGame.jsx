@@ -1,5 +1,11 @@
 import React, { useEffect, useRef, useState } from "react";
 import * as THREE from "three";
+import { RoomEnvironment } from "three/addons/environments/RoomEnvironment.js";
+import { EffectComposer } from "three/addons/postprocessing/EffectComposer.js";
+import { OutputPass } from "three/addons/postprocessing/OutputPass.js";
+import { RenderPass } from "three/addons/postprocessing/RenderPass.js";
+import { ShaderPass } from "three/addons/postprocessing/ShaderPass.js";
+import { UnrealBloomPass } from "three/addons/postprocessing/UnrealBloomPass.js";
 
 const LANES = [-2.55, 0, 2.55];
 const PLAYER_Z = 3.2;
@@ -9,6 +15,73 @@ const START_SPEED = 0.18;
 const MAX_SPEED = 0.52;
 const SPEED_KMH_MIN = 68;
 const SPEED_KMH_MAX = 224;
+const TARGET_FRAME_MS = 18.5;
+const CAMERA_BASE_Y = 6.65;
+const CAMERA_BASE_Z = 12.35;
+const CAMERA_MOBILE_Z_BONUS = 1.25;
+
+const CINEMATIC_SHADER = {
+  uniforms: {
+    tDiffuse: { value: null },
+    uTime: { value: 0 },
+    uSpeed: { value: 0 },
+    uGrain: { value: 0.028 },
+    uVignette: { value: 1.18 },
+    uChromatic: { value: 0.0016 },
+  },
+  vertexShader: `
+    varying vec2 vUv;
+
+    void main() {
+      vUv = uv;
+      gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+    }
+  `,
+  fragmentShader: `
+    uniform sampler2D tDiffuse;
+    uniform float uTime;
+    uniform float uSpeed;
+    uniform float uGrain;
+    uniform float uVignette;
+    uniform float uChromatic;
+    varying vec2 vUv;
+
+    float hash21(vec2 p) {
+      p = fract(p * vec2(123.34, 345.45));
+      p += dot(p, p + 34.345);
+      return fract(p.x * p.y);
+    }
+
+    vec3 cinematicGrade(vec3 color) {
+      color = max(color, vec3(0.0));
+      color = pow(color, vec3(0.93));
+
+      float luma = dot(color, vec3(0.2126, 0.7152, 0.0722));
+      color = mix(vec3(luma), color, 1.16);
+      color = (color - 0.5) * 1.08 + 0.5;
+      color += vec3(0.018, 0.006, 0.012);
+      return max(color, vec3(0.0));
+    }
+
+    void main() {
+      vec2 fromCenter = vUv - 0.5;
+      vec2 chromaOffset = fromCenter * uChromatic * (1.0 + uSpeed * 1.45);
+
+      float red = texture2D(tDiffuse, vUv + chromaOffset).r;
+      float green = texture2D(tDiffuse, vUv).g;
+      float blue = texture2D(tDiffuse, vUv - chromaOffset).b;
+      vec3 color = cinematicGrade(vec3(red, green, blue));
+
+      float vignette = smoothstep(0.22, 0.78, length(fromCenter) * uVignette);
+      color *= mix(1.06, 0.66, vignette);
+
+      float grain = hash21(vUv * vec2(1280.0, 720.0) + uTime * 41.0) - 0.5;
+      color += grain * uGrain;
+
+      gl_FragColor = vec4(color, 1.0);
+    }
+  `,
+};
 
 function clamp(value, min, max) {
   return Math.min(max, Math.max(min, value));
@@ -55,10 +128,23 @@ export default function ThreeCarGame() {
     state.wheelGroups = [];
 
     let lastFrameTime = performance.now();
+    let renderQuality = 1;
+    let frameBudgetTotal = 0;
+    let frameBudgetSamples = 0;
+    let lastQualityChange = performance.now();
+
+    const isTouchDevice = window.matchMedia("(pointer: coarse)").matches;
+    const prefersReducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    const hardwareThreads = navigator.hardwareConcurrency || 8;
+    const deviceMemory = navigator.deviceMemory || 8;
+    const isLowPowerDevice = isTouchDevice || hardwareThreads <= 4 || deviceMemory <= 4;
+    const enablePostProcessing = !isLowPowerDevice && !prefersReducedMotion;
+    const minRenderQuality = isLowPowerDevice ? 0.68 : 0.76;
+    const maxPixelRatio = isLowPowerDevice ? 1 : 1.3;
 
     const scene = new THREE.Scene();
     scene.background = new THREE.Color(0x8fd0ff);
-    scene.fog = new THREE.Fog(0x8fd0ff, 24, 96);
+    scene.fog = new THREE.Fog(0xa9dcff, 34, 132);
 
     const camera = new THREE.PerspectiveCamera(
       60,
@@ -66,33 +152,50 @@ export default function ThreeCarGame() {
       0.1,
       200
     );
-    camera.position.set(0, 6.2, 10);
-    camera.lookAt(0, 1, -10);
+    camera.position.set(0, CAMERA_BASE_Y, CAMERA_BASE_Z + (mount.clientWidth < 700 ? CAMERA_MOBILE_Z_BONUS : 0));
+    camera.lookAt(0, 1.05, -5.6);
 
     const renderer = new THREE.WebGLRenderer({
-      antialias: true,
+      antialias: !isLowPowerDevice,
       powerPreference: "high-performance",
     });
-    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.75));
-    renderer.setSize(mount.clientWidth, mount.clientHeight);
     renderer.outputColorSpace = THREE.SRGBColorSpace;
     renderer.toneMapping = THREE.ACESFilmicToneMapping;
-    renderer.toneMappingExposure = 1.12;
-    renderer.shadowMap.enabled = true;
-    renderer.shadowMap.type = THREE.PCFShadowMap;
+    renderer.toneMappingExposure = 0.98;
+    renderer.shadowMap.enabled = false;
     renderer.domElement.style.touchAction = "none";
     mount.appendChild(renderer.domElement);
 
-    const ambientLight = new THREE.AmbientLight(0xffffff, 0.34);
+    const pmremGenerator = new THREE.PMREMGenerator(renderer);
+    const environmentTexture = pmremGenerator.fromScene(new RoomEnvironment(), 0.04).texture;
+    scene.environment = environmentTexture;
+
+    let composer = null;
+    const renderSize = new THREE.Vector2();
+    function applyRenderSize() {
+      if (!mount) return;
+      const pixelRatio = Math.min(window.devicePixelRatio || 1, maxPixelRatio * renderQuality);
+      renderSize.set(mount.clientWidth, mount.clientHeight);
+      renderer.setPixelRatio(pixelRatio);
+      renderer.setSize(renderSize.x, renderSize.y, false);
+      if (composer) {
+        composer.setPixelRatio(pixelRatio);
+        composer.setSize(renderSize.x, renderSize.y);
+      }
+    }
+
+    applyRenderSize();
+
+    const ambientLight = new THREE.AmbientLight(0xffffff, 0.22);
     scene.add(ambientLight);
 
-    const hemiLight = new THREE.HemisphereLight(0xc9ecff, 0x4c683a, 1.0);
+    const hemiLight = new THREE.HemisphereLight(0xc9ecff, 0x344f30, 0.84);
     scene.add(hemiLight);
 
-    const sun = new THREE.DirectionalLight(0xfff0c7, 2.25);
-    sun.position.set(-12, 20, 12);
+    const sun = new THREE.DirectionalLight(0xffedbf, 2.55);
+    sun.position.set(-15, 22, 13);
     sun.castShadow = true;
-    sun.shadow.mapSize.set(2048, 2048);
+    sun.shadow.mapSize.set(isLowPowerDevice ? 512 : 1024, isLowPowerDevice ? 512 : 1024);
     sun.shadow.camera.left = -26;
     sun.shadow.camera.right = 26;
     sun.shadow.camera.top = 26;
@@ -102,18 +205,78 @@ export default function ThreeCarGame() {
     sun.shadow.bias = -0.00012;
     scene.add(sun);
 
-    const fillLight = new THREE.DirectionalLight(0xcfe8ff, 0.38);
+    const fillLight = new THREE.DirectionalLight(0x91d7ff, 0.28);
     fillLight.position.set(8, 6, 12);
     scene.add(fillLight);
 
-    const rimLight = new THREE.DirectionalLight(0xffffff, 0.48);
+    const rimLight = new THREE.DirectionalLight(0xeef8ff, 0.58);
     rimLight.position.set(0, 4, -12);
     scene.add(rimLight);
 
     const world = new THREE.Group();
     scene.add(world);
 
+    const shaderUniforms = {
+      time: { value: 0 },
+      speed: { value: 0 },
+      skySunDirection: { value: new THREE.Vector3(-0.5, 0.72, 0.22).normalize() },
+    };
+
     const materials = {
+      sky: new THREE.ShaderMaterial({
+        side: THREE.BackSide,
+        depthWrite: false,
+        depthTest: false,
+        uniforms: {
+          uTime: shaderUniforms.time,
+          uSunDirection: shaderUniforms.skySunDirection,
+          uZenith: { value: new THREE.Color(0x5fb4ff) },
+          uHorizon: { value: new THREE.Color(0xc6ebff) },
+          uHaze: { value: new THREE.Color(0xeef8ff) },
+          uSunColor: { value: new THREE.Color(0xffc966) },
+        },
+        vertexShader: `
+          varying vec3 vWorldPosition;
+
+          void main() {
+            vec4 worldPosition = modelMatrix * vec4(position, 1.0);
+            vWorldPosition = worldPosition.xyz;
+            gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+          }
+        `,
+        fragmentShader: `
+          uniform float uTime;
+          uniform vec3 uSunDirection;
+          uniform vec3 uZenith;
+          uniform vec3 uHorizon;
+          uniform vec3 uHaze;
+          uniform vec3 uSunColor;
+          varying vec3 vWorldPosition;
+
+          float hash21(vec2 p) {
+            p = fract(p * vec2(123.34, 345.45));
+            p += dot(p, p + 34.345);
+            return fract(p.x * p.y);
+          }
+
+          void main() {
+            vec3 direction = normalize(vWorldPosition - cameraPosition);
+            float height = clamp(direction.y * 0.5 + 0.5, 0.0, 1.0);
+            vec3 color = mix(uHorizon, uZenith, pow(height, 0.74));
+
+            float sunDisk = pow(max(dot(direction, normalize(uSunDirection)), 0.0), 360.0);
+            float sunGlow = pow(max(dot(direction, normalize(uSunDirection)), 0.0), 8.0);
+            float horizonHaze = pow(1.0 - height, 3.2);
+            float cloudNoise = hash21(direction.xz * 55.0 + uTime * 0.01) * 0.012;
+
+            color = mix(color, uHaze, horizonHaze * 0.36);
+            color += uSunColor * (sunDisk * 2.8 + sunGlow * 0.34);
+            color += cloudNoise;
+
+            gl_FragColor = vec4(color, 1.0);
+          }
+        `,
+      }),
       ground: new THREE.MeshStandardMaterial({ color: 0x4ea85a, roughness: 1 }),
       grassDark: new THREE.MeshStandardMaterial({ color: 0x3f8f49, roughness: 1 }),
       grassLight: new THREE.MeshStandardMaterial({ color: 0x72b75d, roughness: 1 }),
@@ -135,7 +298,14 @@ export default function ThreeCarGame() {
       signBoard: new THREE.MeshStandardMaterial({ color: 0x1d7a5d, roughness: 0.65 }),
       signBack: new THREE.MeshStandardMaterial({ color: 0x28343f, roughness: 0.7 }),
       lampPost: new THREE.MeshStandardMaterial({ color: 0x5d6872, roughness: 0.5, metalness: 0.35 }),
-      lampHead: new THREE.MeshStandardMaterial({ color: 0xffe8a3, emissive: 0xffc857, emissiveIntensity: 0.8, roughness: 0.35 }),
+      lampHead: new THREE.MeshStandardMaterial({ color: 0xffe8a3, emissive: 0xffc857, emissiveIntensity: 0.9, roughness: 0.28 }),
+      lampGlow: new THREE.MeshBasicMaterial({
+        color: 0xffd37a,
+        transparent: true,
+        opacity: 0.12,
+        blending: THREE.AdditiveBlending,
+        depthWrite: false,
+      }),
       mountain: new THREE.MeshStandardMaterial({ color: 0x74879a, roughness: 1 }),
       mountainSnow: new THREE.MeshStandardMaterial({ color: 0xe6f5ff, roughness: 0.85 }),
       trunk: new THREE.MeshStandardMaterial({ color: 0x6b4226, roughness: 1 }),
@@ -149,18 +319,28 @@ export default function ThreeCarGame() {
       chimney: new THREE.MeshStandardMaterial({ color: 0x7d5140, roughness: 0.9 }),
       cloud: new THREE.MeshBasicMaterial({ color: 0xf5fbff, transparent: true, opacity: 0.78, depthWrite: false }),
       sunBlock: new THREE.MeshBasicMaterial({ color: 0xffd166 }),
-      playerBody: new THREE.MeshStandardMaterial({ color: 0xf12a45, roughness: 0.28, metalness: 0.36 }),
-      playerAccent: new THREE.MeshStandardMaterial({ color: 0x121823, roughness: 0.42, metalness: 0.18 }),
+      playerBody: new THREE.MeshPhysicalMaterial({ color: 0xf12a45, roughness: 0.24, metalness: 0.48, clearcoat: 1, clearcoatRoughness: 0.08 }),
+      playerAccent: new THREE.MeshPhysicalMaterial({ color: 0x121823, roughness: 0.32, metalness: 0.32, clearcoat: 0.8, clearcoatRoughness: 0.12 }),
       black: new THREE.MeshStandardMaterial({ color: 0x111827, roughness: 0.35, metalness: 0.18 }),
-      glass: new THREE.MeshStandardMaterial({ color: 0x9fdcff, roughness: 0.08, metalness: 0.25, transparent: true, opacity: 0.82 }),
-      chrome: new THREE.MeshStandardMaterial({ color: 0xd9dde3, roughness: 0.18, metalness: 0.9 }),
+      glass: new THREE.MeshPhysicalMaterial({
+        color: 0x9fdcff,
+        roughness: 0.04,
+        metalness: 0.08,
+        transparent: true,
+        opacity: 0.74,
+        clearcoat: 1,
+        clearcoatRoughness: 0.04,
+        transmission: 0.18,
+        thickness: 0.22,
+      }),
+      chrome: new THREE.MeshPhysicalMaterial({ color: 0xd9dde3, roughness: 0.12, metalness: 0.92, clearcoat: 0.7, clearcoatRoughness: 0.08 }),
       grille: new THREE.MeshStandardMaterial({ color: 0x0b0f15, roughness: 0.55, metalness: 0.55 }),
       plate: new THREE.MeshBasicMaterial({ color: 0xfff6d8 }),
       wheel: new THREE.MeshStandardMaterial({ color: 0x111111, roughness: 0.8 }),
-      rim: new THREE.MeshStandardMaterial({ color: 0xb8c0c8, roughness: 0.28, metalness: 0.9 }),
-      headlight: new THREE.MeshStandardMaterial({ color: 0xfff1b0, emissive: 0xffdd88, emissiveIntensity: 1.35, roughness: 0.25, metalness: 0.15 }),
-      headlightGlow: new THREE.MeshBasicMaterial({ color: 0xffe8a3, transparent: true, opacity: 0.18, depthWrite: false }),
-      taillight: new THREE.MeshStandardMaterial({ color: 0xff5050, emissive: 0xff2222, emissiveIntensity: 1.25, roughness: 0.25, metalness: 0.1 }),
+      rim: new THREE.MeshPhysicalMaterial({ color: 0xb8c0c8, roughness: 0.22, metalness: 0.92, clearcoat: 0.5, clearcoatRoughness: 0.08 }),
+      headlight: new THREE.MeshStandardMaterial({ color: 0xfff1b0, emissive: 0xffdd88, emissiveIntensity: 0.82, roughness: 0.18, metalness: 0.15 }),
+      headlightGlow: new THREE.MeshBasicMaterial({ color: 0xffe8a3, transparent: true, opacity: 0.08, blending: THREE.AdditiveBlending, depthWrite: false }),
+      taillight: new THREE.MeshStandardMaterial({ color: 0xff5050, emissive: 0xff2222, emissiveIntensity: 1.18, roughness: 0.2, metalness: 0.1 }),
       contactShadow: new THREE.MeshBasicMaterial({
         color: 0x000000,
         transparent: true,
@@ -170,6 +350,7 @@ export default function ThreeCarGame() {
     };
 
     const geometries = {
+      sky: new THREE.SphereGeometry(145, 36, 18),
       ground: new THREE.BoxGeometry(150, 0.2, 220),
       grassTile: new THREE.BoxGeometry(5.2, 0.05, 5.2),
       fieldStrip: new THREE.BoxGeometry(5.8, 0.08, 2.1),
@@ -191,6 +372,7 @@ export default function ThreeCarGame() {
       lampPole: new THREE.BoxGeometry(0.12, 3.1, 0.12),
       lampArm: new THREE.BoxGeometry(1.0, 0.1, 0.1),
       lampHead: new THREE.BoxGeometry(0.36, 0.18, 0.28),
+      lampHalo: new THREE.SphereGeometry(0.42, 10, 8),
       mountain: new THREE.ConeGeometry(5, 8, 4),
       mountainSnow: new THREE.ConeGeometry(2.3, 2.6, 4),
       trunk: new THREE.CylinderGeometry(0.12, 0.16, 1.2, 8),
@@ -250,10 +432,124 @@ export default function ThreeCarGame() {
       return shadow;
     }
 
+    function addProceduralSurfaceShader(material, mode, roughnessLift = 0.06) {
+      material.onBeforeCompile = (shader) => {
+        shader.uniforms.uSurfaceTime = shaderUniforms.time;
+        shader.uniforms.uSurfaceSpeed = shaderUniforms.speed;
+
+        shader.vertexShader = shader.vertexShader
+          .replace(
+            "#include <common>",
+            `
+            #include <common>
+            varying vec3 vSurfaceWorldPosition;
+            `
+          )
+          .replace(
+            "#include <worldpos_vertex>",
+            `
+            #include <worldpos_vertex>
+            vSurfaceWorldPosition = worldPosition.xyz;
+            `
+          );
+
+        shader.fragmentShader = shader.fragmentShader
+          .replace(
+            "#include <common>",
+            `
+            #include <common>
+            varying vec3 vSurfaceWorldPosition;
+            uniform float uSurfaceTime;
+            uniform float uSurfaceSpeed;
+
+            float hash21Surface(vec2 p) {
+              p = fract(p * vec2(123.34, 456.21));
+              p += dot(p, p + 45.32);
+              return fract(p.x * p.y);
+            }
+
+            float valueNoiseSurface(vec2 p) {
+              vec2 i = floor(p);
+              vec2 f = fract(p);
+              f = f * f * (3.0 - 2.0 * f);
+
+              float a = hash21Surface(i);
+              float b = hash21Surface(i + vec2(1.0, 0.0));
+              float c = hash21Surface(i + vec2(0.0, 1.0));
+              float d = hash21Surface(i + vec2(1.0, 1.0));
+              return mix(mix(a, b, f.x), mix(c, d, f.x), f.y);
+            }
+            `
+          )
+          .replace(
+            "#include <color_fragment>",
+            `
+            #include <color_fragment>
+            float broadSurface = valueNoiseSurface(vSurfaceWorldPosition.xz * 1.65);
+            float fineSurface = valueNoiseSurface(vSurfaceWorldPosition.xz * 16.0 + vec2(0.0, uSurfaceTime * 0.06));
+            float shaderNoise = mix(broadSurface, fineSurface, 0.42);
+            ${mode === "road"
+              ? `
+                float crackSurface = smoothstep(0.9, 0.985, valueNoiseSurface(vSurfaceWorldPosition.xz * 4.8 + 8.0));
+                float tarFleck = smoothstep(0.965, 0.995, valueNoiseSurface(vSurfaceWorldPosition.xz * 18.0 - 3.0));
+                diffuseColor.rgb *= mix(0.9, 1.08, shaderNoise);
+                diffuseColor.rgb -= crackSurface * vec3(0.018, 0.019, 0.02);
+                diffuseColor.rgb -= tarFleck * vec3(0.028, 0.03, 0.032);
+                diffuseColor.rgb += vec3(0.008, 0.008, 0.006) * smoothstep(0.82, 1.0, fineSurface) * (0.42 + uSurfaceSpeed * 0.35);
+              `
+              : mode === "paint"
+                ? `
+                  float highlightStripe = pow(abs(sin(vSurfaceWorldPosition.x * 11.0 + vSurfaceWorldPosition.z * 0.75)), 14.0);
+                  diffuseColor.rgb *= mix(0.88, 1.12, shaderNoise);
+                  diffuseColor.rgb += vec3(0.085, 0.075, 0.065) * highlightStripe * (0.24 + uSurfaceSpeed * 0.22);
+                `
+                : `
+                  diffuseColor.rgb *= mix(vec3(0.76, 0.92, 0.72), vec3(1.16, 1.08, 0.84), shaderNoise);
+                  diffuseColor.rgb += vec3(0.012, 0.018, 0.0) * smoothstep(0.72, 1.0, fineSurface);
+                `}
+            `
+          )
+          .replace(
+            "#include <roughnessmap_fragment>",
+            `
+            #include <roughnessmap_fragment>
+            roughnessFactor = clamp(roughnessFactor + (1.0 - shaderNoise) * ${roughnessLift.toFixed(3)}, 0.0, 1.0);
+            `
+          );
+      };
+
+      material.customProgramCacheKey = () => `blockrush-${mode}-${roughnessLift}`;
+    }
+
     function trackRoadItem(object, resetAfter = ROAD_RESET_Z, resetBy = FAR_RESET_AMOUNT, speedMul = 1.9) {
       state.animatedRoadItems.push({ object, resetAfter, resetBy, speedMul });
       return object;
     }
+
+    [
+      materials.road,
+      materials.roadPatch,
+      materials.shoulder,
+      materials.shoulderLight,
+    ].forEach((material) => addProceduralSurfaceShader(material, "road", 0.08));
+
+    [
+      materials.ground,
+      materials.grassDark,
+      materials.grassLight,
+      materials.field,
+      materials.crop,
+      materials.leaves,
+      materials.leavesDark,
+      materials.bush,
+    ].forEach((material) => addProceduralSurfaceShader(material, "grass", 0.04));
+
+    addProceduralSurfaceShader(materials.playerBody, "paint", 0.03);
+
+    const skyDome = new THREE.Mesh(geometries.sky, materials.sky);
+    skyDome.frustumCulled = false;
+    skyDome.renderOrder = -100;
+    scene.add(skyDome);
 
     addMesh(geometries.ground, materials.ground, [0, -0.18, -50]);
     addMesh(geometries.road, materials.road, [0, -0.05, -40]);
@@ -409,6 +705,7 @@ export default function ThreeCarGame() {
       addMesh(geometries.lampPole, materials.lampPost, [0, 1.55, 0], group, true, true);
       addMesh(geometries.lampArm, materials.lampPost, [-side * 0.42, 3.04, 0], group, true, true);
       addMesh(geometries.lampHead, materials.lampHead, [-side * 0.94, 2.98, 0], group, false, false);
+      addMesh(geometries.lampHalo, materials.lampGlow, [-side * 0.94, 2.98, 0], group, false, false);
       group.position.set(side * 5.85, 0, z);
       world.add(group);
       trackRoadItem(group, 26, 132, 1.75);
@@ -515,6 +812,18 @@ export default function ThreeCarGame() {
       addMesh(geometries.headlight, materials.headlight, [0.36, 0.5, 1.18], car, false, false);
       addMesh(geometries.headlightBeam, materials.headlightGlow, [-0.36, 0.17, 2.28], car, false, false);
       addMesh(geometries.headlightBeam, materials.headlightGlow, [0.36, 0.17, 2.28], car, false, false);
+
+      if (!isLowPowerDevice) {
+        [-0.36, 0.36].forEach((x) => {
+          const beam = new THREE.SpotLight(0xffe2a8, 0.9, 14, Math.PI / 8, 0.58, 1.35);
+          beam.position.set(x, 0.54, 1.16);
+          beam.target.position.set(x, 0.16, 6.8);
+          beam.castShadow = false;
+          car.add(beam);
+          car.add(beam.target);
+        });
+      }
+
       addMesh(geometries.taillight, materials.taillight, [-0.34, 0.5, -1.18], car, false, false);
       addMesh(geometries.taillight, materials.taillight, [0.34, 0.5, -1.18], car, false, false);
 
@@ -532,8 +841,9 @@ export default function ThreeCarGame() {
     scene.add(player);
 
     const obstacleMaterials = [0x2563eb, 0xf59e0b, 0x10b981, 0x8b5cf6, 0xf43f5e].map(
-      (color) => new THREE.MeshStandardMaterial({ color, roughness: 0.35, metalness: 0.25 })
+      (color) => new THREE.MeshPhysicalMaterial({ color, roughness: 0.28, metalness: 0.34, clearcoat: 0.72, clearcoatRoughness: 0.1 })
     );
+    obstacleMaterials.forEach((material) => addProceduralSurfaceShader(material, "paint", 0.035));
 
     function createObstacleCar(z = -40) {
       const car = new THREE.Group();
@@ -630,12 +940,57 @@ export default function ThreeCarGame() {
       );
     }
 
+    let bloomPass = null;
+    let cinematicPass = null;
+
+    if (enablePostProcessing) {
+      const renderPass = new RenderPass(scene, camera);
+      bloomPass = new UnrealBloomPass(
+        new THREE.Vector2(mount.clientWidth, mount.clientHeight),
+        0.1,
+        0.38,
+        0.95
+      );
+      cinematicPass = new ShaderPass(CINEMATIC_SHADER);
+      cinematicPass.uniforms.uGrain.value = 0.026;
+      cinematicPass.uniforms.uVignette.value = 1.18;
+      cinematicPass.uniforms.uChromatic.value = 0.0016;
+
+      composer = new EffectComposer(renderer);
+      composer.addPass(renderPass);
+      composer.addPass(bloomPass);
+      composer.addPass(cinematicPass);
+      composer.addPass(new OutputPass());
+    }
+
+    applyRenderSize();
+
     function animate() {
       state.animationId = requestAnimationFrame(animate);
       const now = performance.now();
       const dt = Math.min((now - lastFrameTime) / 1000, 0.033);
       lastFrameTime = now;
       const frameScale = dt * 60;
+      frameBudgetTotal += dt * 1000;
+      frameBudgetSamples += 1;
+
+      if (frameBudgetSamples >= 90 && now - lastQualityChange > 1000) {
+        const averageFrameMs = frameBudgetTotal / frameBudgetSamples;
+        const nextQuality = averageFrameMs > TARGET_FRAME_MS
+          ? Math.max(minRenderQuality, renderQuality - 0.1)
+          : averageFrameMs < 13.5
+            ? Math.min(1, renderQuality + 0.05)
+            : renderQuality;
+
+        if (Math.abs(nextQuality - renderQuality) > 0.001) {
+          renderQuality = nextQuality;
+          applyRenderSize();
+          lastQualityChange = now;
+        }
+
+        frameBudgetTotal = 0;
+        frameBudgetSamples = 0;
+      }
 
       const moving = state.started && !state.gameOver;
       const roadMove = (moving ? state.speed : 0.012) * frameScale;
@@ -709,12 +1064,25 @@ export default function ThreeCarGame() {
       camera.updateProjectionMatrix();
 
       const speedProgress = (state.speed - START_SPEED) / (MAX_SPEED - START_SPEED);
+      const narrowViewportBonus = camera.aspect < 0.8 ? CAMERA_MOBILE_Z_BONUS : 0;
       camera.position.x += (player.position.x * 0.25 - camera.position.x) * 0.05 * frameScale;
-      camera.position.y += (6.15 - speedProgress * 0.35 - camera.position.y) * 0.035 * frameScale;
-      camera.position.z += (10 - speedProgress * 0.85 - camera.position.z) * 0.035 * frameScale;
-      camera.lookAt(player.position.x * 0.2, 0.8 + speedProgress * 0.16, -8 - speedProgress * 1.2);
+      camera.position.y += (CAMERA_BASE_Y - speedProgress * 0.28 - camera.position.y) * 0.035 * frameScale;
+      camera.position.z += (CAMERA_BASE_Z + narrowViewportBonus - speedProgress * 0.62 - camera.position.z) * 0.035 * frameScale;
+      camera.lookAt(player.position.x * 0.2, 1.0 + speedProgress * 0.14, -5.6 - speedProgress * 0.9);
 
-      renderer.render(scene, camera);
+      shaderUniforms.time.value = now * 0.001;
+      shaderUniforms.speed.value = speedProgress;
+      if (bloomPass && cinematicPass) {
+        bloomPass.strength = 0.1 + speedProgress * 0.03;
+        cinematicPass.uniforms.uTime.value = now * 0.001;
+        cinematicPass.uniforms.uSpeed.value = speedProgress;
+      }
+
+      if (composer) {
+        composer.render();
+      } else {
+        renderer.render(scene, camera);
+      }
     }
 
     animate();
@@ -727,7 +1095,10 @@ export default function ThreeCarGame() {
         if (!mount) return;
         camera.aspect = mount.clientWidth / mount.clientHeight;
         camera.updateProjectionMatrix();
-        renderer.setSize(mount.clientWidth, mount.clientHeight);
+        if (bloomPass) {
+          bloomPass.resolution.set(mount.clientWidth, mount.clientHeight);
+        }
+        applyRenderSize();
       });
     };
 
@@ -743,6 +1114,13 @@ export default function ThreeCarGame() {
       if (mount.contains(renderer.domElement)) {
         mount.removeChild(renderer.domElement);
       }
+
+      if (composer) {
+        composer.dispose();
+      }
+      environmentTexture.dispose();
+      pmremGenerator.dispose();
+      scene.environment = null;
 
       scene.traverse((object) => {
         if (object.material && !Object.values(materials).includes(object.material) && !obstacleMaterials.includes(object.material)) {
@@ -805,13 +1183,45 @@ export default function ThreeCarGame() {
   const actionLabel = gameOver ? "RETRY" : started ? "RESET" : "START";
 
   return (
-    <div className="relative min-h-screen w-full overflow-hidden bg-[#06101d] text-white">
+    <div
+      className="relative min-h-screen w-full overflow-hidden bg-[#06101d] text-white"
+      style={{ minHeight: "100vh", height: "100dvh" }}
+    >
       <div
         className="relative h-[100svh] min-h-[540px] w-full overflow-hidden bg-slate-900 touch-none select-none"
+        style={{ minHeight: 540, height: "100dvh", width: "100%" }}
         onPointerDown={handleStagePointerDown}
         onPointerUp={handleStagePointerUp}
       >
-        <div ref={mountRef} className="h-full w-full" />
+        <div ref={mountRef} className="h-full w-full" style={{ height: "100%", width: "100%" }} />
+
+        <style>{`
+          @keyframes blockrush-fog-breathe {
+            0%, 100% {
+              opacity: 0.035;
+              transform: translate3d(-1.5%, 0, 0) scale(1);
+            }
+
+            50% {
+              opacity: 0.095;
+              transform: translate3d(1.5%, -1%, 0) scale(1.035);
+            }
+          }
+
+          .blockrush-fog-overlay {
+            animation: blockrush-fog-breathe 6.5s ease-in-out infinite;
+            background:
+              radial-gradient(circle at 50% 58%, rgba(236, 250, 255, 0.12), transparent 31%),
+              radial-gradient(circle at 20% 68%, rgba(220, 246, 255, 0.1), transparent 34%),
+              radial-gradient(circle at 82% 34%, rgba(245, 252, 255, 0.08), transparent 32%),
+              linear-gradient(to bottom, rgba(230, 248, 255, 0.06), transparent 28%, rgba(233, 255, 240, 0.05) 82%);
+            filter: blur(12px);
+            mix-blend-mode: screen;
+            will-change: opacity, transform;
+          }
+        `}</style>
+
+        <div className="pointer-events-none absolute inset-0 blockrush-fog-overlay" style={{ zIndex: 9 }} />
 
         <div className="pointer-events-none absolute left-3 right-3 top-3 z-20 flex items-start justify-between gap-3 sm:left-6 sm:right-6 sm:top-6">
           <div className="flex items-start gap-2 sm:gap-3">
