@@ -15,7 +15,8 @@ const START_SPEED = 0.18;
 const MAX_SPEED = 0.52;
 const SPEED_KMH_MIN = 68;
 const SPEED_KMH_MAX = 224;
-const TARGET_FRAME_MS = 18.5;
+// ── PERF: raised budget tolerance so quality doesn't drop aggressively ──
+const TARGET_FRAME_MS = 22;
 const CAMERA_BASE_Y = 3.85;
 const CAMERA_BASE_Z = 12.95;
 const CAMERA_MOBILE_Z_BONUS = 3.15;
@@ -185,12 +186,14 @@ const WEATHER_PRESETS = {
   },
 };
 
+// ── FIX: uGrain set to 0 → grain overlay completely removed ──────────────
+// ── PERF: chromatic aberration & vignette kept but grain is zeroed out ──
 const CINEMATIC_SHADER = {
   uniforms: {
     tDiffuse: { value: null },
     uTime: { value: 0 },
     uSpeed: { value: 0 },
-    uGrain: { value: 0.028 },
+    uGrain: { value: 0 },          // ← was 0.028 — now 0 (no grain)
     uVignette: { value: 1.18 },
     uChromatic: { value: 0.0016 },
     uTint: { value: new THREE.Vector3(1, 1, 1) },
@@ -199,17 +202,16 @@ const CINEMATIC_SHADER = {
   },
   vertexShader: `
     varying vec2 vUv;
-
     void main() {
       vUv = uv;
       gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
     }
   `,
+  // ── PERF: hash21 + grain lines removed from fragment shader entirely ──
   fragmentShader: `
     uniform sampler2D tDiffuse;
     uniform float uTime;
     uniform float uSpeed;
-    uniform float uGrain;
     uniform float uVignette;
     uniform float uChromatic;
     uniform vec3 uTint;
@@ -217,16 +219,9 @@ const CINEMATIC_SHADER = {
     uniform float uContrast;
     varying vec2 vUv;
 
-    float hash21(vec2 p) {
-      p = fract(p * vec2(123.34, 345.45));
-      p += dot(p, p + 34.345);
-      return fract(p.x * p.y);
-    }
-
     vec3 cinematicGrade(vec3 color) {
       color = max(color, vec3(0.0));
       color = pow(color, vec3(0.93));
-
       float luma = dot(color, vec3(0.2126, 0.7152, 0.0722));
       color = mix(vec3(luma), color, uSaturation);
       color = (color - 0.5) * uContrast + 0.5;
@@ -239,16 +234,13 @@ const CINEMATIC_SHADER = {
       vec2 fromCenter = vUv - 0.5;
       vec2 chromaOffset = fromCenter * uChromatic * (1.0 + uSpeed * 1.45);
 
-      float red = texture2D(tDiffuse, vUv + chromaOffset).r;
+      float red   = texture2D(tDiffuse, vUv + chromaOffset).r;
       float green = texture2D(tDiffuse, vUv).g;
-      float blue = texture2D(tDiffuse, vUv - chromaOffset).b;
+      float blue  = texture2D(tDiffuse, vUv - chromaOffset).b;
       vec3 color = cinematicGrade(vec3(red, green, blue));
 
       float vignette = smoothstep(0.22, 0.78, length(fromCenter) * uVignette);
       color *= mix(1.06, 0.66, vignette);
-
-      float grain = hash21(vUv * vec2(1280.0, 720.0) + uTime * 41.0) - 0.5;
-      color += grain * uGrain;
 
       gl_FragColor = vec4(color, 1.0);
     }
@@ -258,16 +250,13 @@ const CINEMATIC_SHADER = {
 function clamp(value, min, max) {
   return Math.min(max, Math.max(min, value));
 }
-
 function lerp(start, end, progress) {
   return start + (end - start) * progress;
 }
-
 function easeInOutCubic(value) {
   const t = clamp(value, 0, 1);
   return t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
 }
-
 function speedToKmh(speed) {
   const speedProgress = (speed - START_SPEED) / (MAX_SPEED - START_SPEED);
   return Math.round(SPEED_KMH_MIN + clamp(speedProgress, 0, 1) * (SPEED_KMH_MAX - SPEED_KMH_MIN));
@@ -327,10 +316,12 @@ export default function ThreeCarGame() {
     const isTouchDevice = window.matchMedia("(pointer: coarse)").matches;
     const hardwareThreads = navigator.hardwareConcurrency || 8;
     const deviceMemory = navigator.deviceMemory || 8;
-    const isLowPowerDevice = isTouchDevice || hardwareThreads <= 4 || deviceMemory <= 4;
+    // ── PERF: broader low-power detection threshold ──
+    const isLowPowerDevice = isTouchDevice || hardwareThreads <= 6 || deviceMemory <= 4;
     const enablePostProcessing = true;
-    const minRenderQuality = isLowPowerDevice ? 0.72 : 0.82;
-    const maxPixelRatio = isLowPowerDevice ? 1.15 : 1.5;
+    const minRenderQuality = isLowPowerDevice ? 0.65 : 0.75;
+    // ── PERF: lower pixel ratio ceiling reduces fill-rate pressure ──
+    const maxPixelRatio = isLowPowerDevice ? 1.0 : 1.25;
 
     const scene = new THREE.Scene();
     scene.background = WEATHER_PRESETS.clear_noon.skyTop.clone();
@@ -356,6 +347,7 @@ export default function ThreeCarGame() {
     renderer.outputColorSpace = THREE.SRGBColorSpace;
     renderer.toneMapping = THREE.ACESFilmicToneMapping;
     renderer.toneMappingExposure = 0.98;
+    // ── PERF: shadows disabled — saves a full shadow-map draw call per frame ──
     renderer.shadowMap.enabled = false;
     renderer.domElement.style.touchAction = "none";
     mount.appendChild(renderer.domElement);
@@ -363,7 +355,8 @@ export default function ThreeCarGame() {
     const pmremGenerator = new THREE.PMREMGenerator(renderer);
     const environmentTexture = pmremGenerator.fromScene(new RoomEnvironment(), 0.04).texture;
     scene.environment = environmentTexture;
-    const cubeReflectionTarget = new THREE.WebGLCubeRenderTarget(isLowPowerDevice ? 64 : 128, {
+    // ── PERF: smaller cube-map target on all devices ──
+    const cubeReflectionTarget = new THREE.WebGLCubeRenderTarget(isLowPowerDevice ? 32 : 64, {
       generateMipmaps: true,
       minFilter: THREE.LinearMipmapLinearFilter,
     });
@@ -394,15 +387,8 @@ export default function ThreeCarGame() {
 
     const sun = new THREE.DirectionalLight(0xffedbf, 2.55);
     sun.position.set(-15, 22, 13);
-    sun.castShadow = true;
-    sun.shadow.mapSize.set(isLowPowerDevice ? 512 : 1024, isLowPowerDevice ? 512 : 1024);
-    sun.shadow.camera.left = -26;
-    sun.shadow.camera.right = 26;
-    sun.shadow.camera.top = 26;
-    sun.shadow.camera.bottom = -26;
-    sun.shadow.camera.near = 1;
-    sun.shadow.camera.far = 70;
-    sun.shadow.bias = -0.00012;
+    // ── PERF: shadows off — matches renderer.shadowMap.enabled = false ──
+    sun.castShadow = false;
     scene.add(sun);
 
     const fillLight = new THREE.DirectionalLight(0x91d7ff, 0.28);
@@ -444,7 +430,6 @@ export default function ThreeCarGame() {
         },
         vertexShader: `
           varying vec3 vWorldPosition;
-
           void main() {
             vec4 worldPosition = modelMatrix * vec4(position, 1.0);
             vWorldPosition = worldPosition.xyz;
@@ -713,12 +698,12 @@ export default function ThreeCarGame() {
       bumper: new THREE.BoxGeometry(1.18, 0.14, 0.18),
       headlight: new THREE.BoxGeometry(0.18, 0.1, 0.08),
       taillight: new THREE.BoxGeometry(0.2, 0.1, 0.08),
-      tire: new THREE.CylinderGeometry(0.24, 0.24, 0.26, 16),
-      rim: new THREE.CylinderGeometry(0.13, 0.13, 0.27, 12),
+      tire: new THREE.CylinderGeometry(0.24, 0.24, 0.26, 14), // ── PERF: 16→14 segments
+      rim: new THREE.CylinderGeometry(0.13, 0.13, 0.27, 10),  // ── PERF: 12→10 segments
       obstacleBody: new THREE.BoxGeometry(1.25, 0.42, 2.05),
       obstacleCabin: new THREE.BoxGeometry(0.85, 0.36, 0.85),
       obstacleGlass: new THREE.BoxGeometry(0.75, 0.22, 0.6),
-      obstacleWheel: new THREE.CylinderGeometry(0.21, 0.21, 0.22, 14),
+      obstacleWheel: new THREE.CylinderGeometry(0.21, 0.21, 0.22, 12), // ── PERF: 14→12
       contactShadowPlayer: new THREE.PlaneGeometry(1.6, 2.8),
       contactShadowObstacle: new THREE.PlaneGeometry(1.5, 2.5),
     };
@@ -750,20 +735,8 @@ export default function ThreeCarGame() {
         shader.uniforms.uSnowCover = shaderUniforms.snowCover;
 
         shader.vertexShader = shader.vertexShader
-          .replace(
-            "#include <common>",
-            `
-            #include <common>
-            varying vec3 vSurfaceWorldPosition;
-            `
-          )
-          .replace(
-            "#include <worldpos_vertex>",
-            `
-            #include <worldpos_vertex>
-            vSurfaceWorldPosition = worldPosition.xyz;
-            `
-          );
+          .replace("#include <common>", `#include <common>\nvarying vec3 vSurfaceWorldPosition;`)
+          .replace("#include <worldpos_vertex>", `#include <worldpos_vertex>\nvSurfaceWorldPosition = worldPosition.xyz;`);
 
         shader.fragmentShader = shader.fragmentShader
           .replace(
@@ -786,7 +759,6 @@ export default function ThreeCarGame() {
               vec2 i = floor(p);
               vec2 f = fract(p);
               f = f * f * (3.0 - 2.0 * f);
-
               float a = hash21Surface(i);
               float b = hash21Surface(i + vec2(1.0, 0.0));
               float c = hash21Surface(i + vec2(0.0, 1.0));
@@ -856,7 +828,6 @@ export default function ThreeCarGame() {
           );
         }
       };
-
       material.customProgramCacheKey = () => `blockrush-${mode}-${roughnessLift}`;
     }
 
@@ -865,24 +836,13 @@ export default function ThreeCarGame() {
       return object;
     }
 
-    [
-      materials.road,
-      materials.roadPatch,
-      materials.shoulder,
-      materials.shoulderLight,
-    ].forEach((material) => addProceduralSurfaceShader(material, "road", 0.08));
-
-    [
-      materials.ground,
-      materials.grassDark,
-      materials.grassLight,
-      materials.field,
-      materials.crop,
-      materials.leaves,
-      materials.leavesDark,
-      materials.bush,
-    ].forEach((material) => addProceduralSurfaceShader(material, "grass", 0.04));
-
+    [materials.road, materials.roadPatch, materials.shoulder, materials.shoulderLight].forEach(
+      (material) => addProceduralSurfaceShader(material, "road", 0.08)
+    );
+    [materials.ground, materials.grassDark, materials.grassLight, materials.field, materials.crop,
+      materials.leaves, materials.leavesDark, materials.bush].forEach(
+      (material) => addProceduralSurfaceShader(material, "grass", 0.04)
+    );
     addProceduralSurfaceShader(materials.playerBody, "paint", 0.03);
 
     const skyDome = new THREE.Mesh(geometries.sky, materials.sky);
@@ -906,21 +866,14 @@ export default function ThreeCarGame() {
     }
 
     for (let z = -95; z < 20; z += 6) {
-      [-1.35, 1.35].forEach((x) => {
-        addTrackedMesh(geometries.laneLine, materials.laneLine, [x, 0.035, z]);
-      });
+      [-1.35, 1.35].forEach((x) => addTrackedMesh(geometries.laneLine, materials.laneLine, [x, 0.035, z]));
     }
-
     for (let z = -98; z < 22; z += 4.8) {
-      [-3.82, 3.82].forEach((x) => {
-        addTrackedMesh(geometries.edgeLine, materials.edgeLine, [x, 0.04, z], 22, 124, 1.9);
-      });
+      [-3.82, 3.82].forEach((x) => addTrackedMesh(geometries.edgeLine, materials.edgeLine, [x, 0.04, z], 22, 124, 1.9));
     }
-
     for (let z = -106; z < 22; z += 5.6) {
       const lane = LANES[Math.floor(Math.random() * LANES.length)];
       addTrackedMesh(geometries.roadPatch, materials.roadPatch, [lane + (Math.random() - 0.5) * 0.55, 0.03, z], 22, 128, 1.9);
-
       if (Math.random() > 0.45) {
         const mark = addTrackedMesh(geometries.tireMark, materials.tireMark, [lane + 0.34, 0.045, z - 1.4], 22, 128, 1.9);
         mark.rotation.y = (Math.random() - 0.5) * 0.06;
@@ -930,14 +883,7 @@ export default function ThreeCarGame() {
     const wetSurfaceObjects = [];
     for (let z = -104; z < 14; z += 9.5) {
       const lane = LANES[Math.floor(Math.random() * LANES.length)];
-      const puddle = addTrackedMesh(
-        geometries.puddle,
-        materials.puddle,
-        [lane + (Math.random() - 0.5) * 0.42, 0.055, z],
-        22,
-        128,
-        1.9
-      );
+      const puddle = addTrackedMesh(geometries.puddle, materials.puddle, [lane + (Math.random() - 0.5) * 0.42, 0.055, z], 22, 128, 1.9);
       puddle.scale.set(0.65 + Math.random() * 0.75, 1, 0.7 + Math.random() * 0.95);
       puddle.rotation.y = (Math.random() - 0.5) * 0.08;
       wetSurfaceObjects.push(puddle);
@@ -953,29 +899,21 @@ export default function ThreeCarGame() {
 
     function createBarrierSegment(x, z, side) {
       const group = new THREE.Group();
-      addMesh(geometries.barrier, materials.barrier, [0, 0.22, 0], group, true, true);
-      addMesh(geometries.barrierTop, materials.barrierTop, [0, 0.52, 0], group, true, true);
+      addMesh(geometries.barrier, materials.barrier, [0, 0.22, 0], group, false, true);
+      addMesh(geometries.barrierTop, materials.barrierTop, [0, 0.52, 0], group, false, true);
       addMesh(geometries.reflector, materials.reflector, [-side * 0.24, 0.45, -0.64], group, false, false);
       addMesh(geometries.reflector, materials.reflector, [-side * 0.24, 0.45, 0.64], group, false, false);
       group.position.set(x, 0, z);
       world.add(group);
       trackRoadItem(group, 22, 124, 1.9);
     }
-
     for (let z = -100; z < 25; z += 5) {
-      [-5.3, 5.3].forEach((x) => {
-        createBarrierSegment(x, z, Math.sign(x));
-      });
+      [-5.3, 5.3].forEach((x) => createBarrierSegment(x, z, Math.sign(x)));
     }
 
     function createCloud(x, y, z, scale = 1) {
       const group = new THREE.Group();
-      [
-        [-0.8, 0, 0],
-        [0, 0.2, 0],
-        [0.88, 0.02, 0],
-        [0.28, -0.16, 0.15],
-      ].forEach(([px, py, pz], index) => {
+      [[-0.8, 0, 0], [0, 0.2, 0], [0.88, 0.02, 0], [0.28, -0.16, 0.15]].forEach(([px, py, pz], index) => {
         const block = addMesh(geometries.cloudBlock, materials.cloud, [px, py, pz], group, false, false);
         block.scale.setScalar(index === 1 ? 1.18 : 0.82 + index * 0.06);
       });
@@ -984,7 +922,6 @@ export default function ThreeCarGame() {
       world.add(group);
       trackRoadItem(group, 42, 150, 0.28);
     }
-
     for (let i = 0; i < 7; i++) {
       createCloud(-28 + i * 9 + Math.random() * 4, 9 + Math.random() * 3, -35 - i * 16, 0.9 + Math.random() * 0.5);
     }
@@ -994,16 +931,13 @@ export default function ThreeCarGame() {
       const body = addMesh(geometries.mountain, materials.mountain, [0, 3.8, 0], group, false, true);
       body.scale.setScalar(scale);
       body.rotation.y = Math.PI * 0.25;
-
       const snow = addMesh(geometries.mountainSnow, materials.mountainSnow, [0, 7.0 * scale, 0], group, false, false);
       snow.scale.setScalar(scale * 0.52);
       snow.rotation.y = Math.PI * 0.25;
-
       group.position.set(x, 0, z);
       world.add(group);
       trackRoadItem(group, 36, 158, 0.55);
     }
-
     for (let i = 0; i < 15; i++) {
       const side = i % 2 === 0 ? -1 : 1;
       createMountain(side * (26 + Math.random() * 16), -88 - i * 7 - Math.random() * 24, 0.7 + Math.random() * 0.8);
@@ -1011,24 +945,23 @@ export default function ThreeCarGame() {
 
     function createFenceSegment(x, z) {
       const group = new THREE.Group();
-      addMesh(geometries.fencePost, materials.barrier, [0, 0.36, -1.18], group, true, true);
-      addMesh(geometries.fencePost, materials.barrier, [0, 0.36, 1.18], group, true, true);
-      addMesh(geometries.fenceRail, materials.barrierTop, [0, 0.55, 0], group, true, true);
+      addMesh(geometries.fencePost, materials.barrier, [0, 0.36, -1.18], group, false, true);
+      addMesh(geometries.fencePost, materials.barrier, [0, 0.36, 1.18], group, false, true);
+      addMesh(geometries.fenceRail, materials.barrierTop, [0, 0.55, 0], group, false, true);
       group.position.set(x, 0, z);
       world.add(group);
       trackRoadItem(group, 24, 128, 1.65);
     }
-
     for (let z = -102; z < 24; z += 8) {
       [-7.1, 7.1].forEach((x) => createFenceSegment(x, z));
     }
 
     function createTree(x, z) {
       const group = new THREE.Group();
-      addMesh(geometries.trunk, materials.trunk, [0, 0.6, 0], group, true, false);
-      addMesh(geometries.leaves, materials.leavesDark, [0, 1.55, 0], group, true, false);
-      addMesh(geometries.leaves, materials.leaves, [0, 2.1, 0], group, true, false).scale.setScalar(0.82);
-      addMesh(geometries.bush, materials.bush, [0.45, 0.24, 0.15], group, true, true);
+      addMesh(geometries.trunk, materials.trunk, [0, 0.6, 0], group, false, false);
+      addMesh(geometries.leaves, materials.leavesDark, [0, 1.55, 0], group, false, false);
+      addMesh(geometries.leaves, materials.leaves, [0, 2.1, 0], group, false, false).scale.setScalar(0.82);
+      addMesh(geometries.bush, materials.bush, [0.45, 0.24, 0.15], group, false, true);
       group.position.set(x, 0, z);
       group.scale.setScalar(0.85 + Math.random() * 0.65);
       world.add(group);
@@ -1039,7 +972,7 @@ export default function ThreeCarGame() {
       const group = new THREE.Group();
       addMesh(geometries.fieldStrip, materials.field, [0, 0.02, 0], group, false, true);
       for (let i = -2; i <= 2; i++) {
-        addMesh(geometries.cropRow, materials.crop, [i * 0.48, 0.16, 0], group, true, false);
+        addMesh(geometries.cropRow, materials.crop, [i * 0.48, 0.16, 0], group, false, false);
       }
       group.position.set(x, -0.02, z);
       world.add(group);
@@ -1048,9 +981,9 @@ export default function ThreeCarGame() {
 
     function createRoadSign(side, z) {
       const group = new THREE.Group();
-      addMesh(geometries.signPost, materials.signPost, [0, 0.95, 0], group, true, true);
-      addMesh(geometries.signBoard, materials.signBoard, [0, 1.85, 0], group, true, false);
-      addMesh(geometries.signBoard, materials.signBack, [0, 1.82, -0.08], group, true, false).scale.set(0.88, 0.7, 0.55);
+      addMesh(geometries.signPost, materials.signPost, [0, 0.95, 0], group, false, true);
+      addMesh(geometries.signBoard, materials.signBoard, [0, 1.85, 0], group, false, false);
+      addMesh(geometries.signBoard, materials.signBack, [0, 1.82, -0.08], group, false, false).scale.set(0.88, 0.7, 0.55);
       addMesh(geometries.reflector, materials.reflector, [-0.52, 1.98, 0.08], group, false, false);
       addMesh(geometries.reflector, materials.reflector, [0.52, 1.98, 0.08], group, false, false);
       group.position.set(side * 6.8, 0, z);
@@ -1061,8 +994,8 @@ export default function ThreeCarGame() {
 
     function createLamp(side, z) {
       const group = new THREE.Group();
-      addMesh(geometries.lampPole, materials.lampPost, [0, 1.55, 0], group, true, true);
-      addMesh(geometries.lampArm, materials.lampPost, [-side * 0.42, 3.04, 0], group, true, true);
+      addMesh(geometries.lampPole, materials.lampPost, [0, 1.55, 0], group, false, true);
+      addMesh(geometries.lampArm, materials.lampPost, [-side * 0.42, 3.04, 0], group, false, true);
       addMesh(geometries.lampHead, materials.lampHead, [-side * 0.94, 2.98, 0], group, false, false);
       addMesh(geometries.lampHalo, materials.lampGlow, [-side * 0.94, 2.98, 0], group, false, false);
       group.position.set(side * 5.85, 0, z);
@@ -1072,14 +1005,12 @@ export default function ThreeCarGame() {
 
     function createHouse(side, z, index) {
       const group = new THREE.Group();
-      addMesh(geometries.houseBody, materials.buildingWall, [0, 0.8, 0], group, true, true);
-
-      const roof = addMesh(geometries.houseRoof, materials.buildingRoof, [0, 1.92, 0], group, true, true);
+      addMesh(geometries.houseBody, materials.buildingWall, [0, 0.8, 0], group, false, true);
+      const roof = addMesh(geometries.houseRoof, materials.buildingRoof, [0, 1.92, 0], group, false, true);
       roof.rotation.y = Math.PI * 0.25;
-
       addMesh(geometries.window, materials.window, [-0.66, 0.92, 1.22], group, false, false);
       addMesh(geometries.window, materials.window, [0.66, 0.92, 1.22], group, false, false);
-      addMesh(geometries.chimney, materials.chimney, [0.72, 2.25, -0.4], group, true, true);
+      addMesh(geometries.chimney, materials.chimney, [0.72, 2.25, -0.4], group, false, true);
       group.position.set(side * (15 + (index % 3) * 3.4), 0, z);
       group.rotation.y = side < 0 ? 0.18 : -0.18;
       world.add(group);
@@ -1088,37 +1019,22 @@ export default function ThreeCarGame() {
 
     function createCityBlock(side, z, index) {
       const group = new THREE.Group();
-      const towerMaterial = index % 3 === 0
-        ? materials.cityDarkWall
-        : index % 3 === 1
-          ? materials.cityWallCool
-          : materials.cityWall;
+      const towerMaterial = index % 3 === 0 ? materials.cityDarkWall : index % 3 === 1 ? materials.cityWallCool : materials.cityWall;
       const towerHeight = 0.82 + (index % 4) * 0.12;
-      const tower = addMesh(geometries.cityTower, towerMaterial, [0, 2.7 * towerHeight, 0], group, true, true);
+      const tower = addMesh(geometries.cityTower, towerMaterial, [0, 2.7 * towerHeight, 0], group, false, true);
       tower.scale.set(0.86 + (index % 2) * 0.18, towerHeight, 0.92 + (index % 3) * 0.08);
-
-      const shop = addMesh(geometries.cityShop, materials.cityWall, [-side * 0.18, 1.05, 2.05], group, true, true);
+      const shop = addMesh(geometries.cityShop, materials.cityWall, [-side * 0.18, 1.05, 2.05], group, false, true);
       shop.scale.set(1.06, 0.94, 0.82);
-
       const facadeX = -side * (1.72 + (index % 2) * 0.22);
       for (let row = 0; row < 3; row++) {
         for (let col = -1; col <= 1; col++) {
-          const windowMesh = addMesh(
-            geometries.cityWindow,
-            materials.cityWindow,
-            [facadeX, 1.8 + row * 1.05, col * 0.72 - 0.2],
-            group,
-            false,
-            false
-          );
+          const windowMesh = addMesh(geometries.cityWindow, materials.cityWindow, [facadeX, 1.8 + row * 1.05, col * 0.72 - 0.2], group, false, false);
           windowMesh.rotation.y = Math.PI * 0.5;
         }
       }
-
       const awning = addMesh(geometries.awning, index % 2 === 0 ? materials.rumbleRed : materials.signBoard, [facadeX, 1.72, 1.65], group, false, false);
       awning.rotation.y = Math.PI * 0.5;
       awning.scale.set(0.9, 1, 1.1);
-
       group.position.set(side * (9.2 + (index % 3) * 1.3), 0, z);
       group.rotation.y = side < 0 ? 0.03 : -0.03;
       world.add(group);
@@ -1127,9 +1043,9 @@ export default function ThreeCarGame() {
 
     function createStreetTree(side, z, index) {
       const group = new THREE.Group();
-      addMesh(geometries.planter, materials.planter, [0, 0.22, 0], group, true, true);
-      addMesh(geometries.trunk, materials.trunk, [0, 0.92, 0], group, true, false).scale.set(0.72, 0.95, 0.72);
-      const crown = addMesh(geometries.leaves, index % 2 === 0 ? materials.leavesDark : materials.leaves, [0, 1.9, 0], group, true, false);
+      addMesh(geometries.planter, materials.planter, [0, 0.22, 0], group, false, true);
+      addMesh(geometries.trunk, materials.trunk, [0, 0.92, 0], group, false, false).scale.set(0.72, 0.95, 0.72);
+      const crown = addMesh(geometries.leaves, index % 2 === 0 ? materials.leavesDark : materials.leaves, [0, 1.9, 0], group, false, false);
       crown.scale.set(0.95, 0.86, 0.95);
       group.position.set(side * 6.75, 0, z);
       world.add(group);
@@ -1143,9 +1059,7 @@ export default function ThreeCarGame() {
           geometries.grassTile,
           Math.random() > 0.5 ? materials.grassDark : materials.grassLight,
           [side * sideOffset, -0.055, z + (Math.random() - 0.5) * 2.4],
-          24,
-          132,
-          1.55
+          24, 132, 1.55
         );
         tile.rotation.y = (Math.random() - 0.5) * 0.35;
       });
@@ -1155,18 +1069,15 @@ export default function ThreeCarGame() {
       createTree(-10 - Math.random() * 4, z + Math.random() * 2);
       createTree(10 + Math.random() * 4, z + Math.random() * 2);
     }
-
     for (let z = -112; z < 16; z += 18) {
       createCropPatch(-18 - Math.random() * 5, z);
       createCropPatch(18 + Math.random() * 5, z + 7);
     }
-
     for (let z = -110; z < 8; z += 28) {
       createRoadSign(Math.random() > 0.5 ? -1 : 1, z + 5);
       createHouse(-1, z - 2, Math.floor(Math.random() * 5));
       createHouse(1, z - 12, Math.floor(Math.random() * 5));
     }
-
     for (let z = -112; z < 14; z += 18) {
       const index = Math.floor((z + 112) / 18);
       createCityBlock(-1, z - 3, index);
@@ -1174,7 +1085,6 @@ export default function ThreeCarGame() {
       createStreetTree(-1, z + 5, index);
       createStreetTree(1, z - 5, index + 1);
     }
-
     for (let z = -100; z < 20; z += 18) {
       createLamp(-1, z);
       createLamp(1, z + 9);
@@ -1184,13 +1094,12 @@ export default function ThreeCarGame() {
       const wheelGroup = new THREE.Group();
       const tire = new THREE.Mesh(tireGeometry, materials.wheel);
       tire.rotation.z = Math.PI / 2;
-      tire.castShadow = true;
+      // ── PERF: castShadow false on wheels — shadow map off anyway ──
+      tire.castShadow = false;
       wheelGroup.add(tire);
-
       const rim = new THREE.Mesh(geometries.rim, materials.rim);
       rim.rotation.z = Math.PI / 2;
       wheelGroup.add(rim);
-
       wheelGroup.position.set(x, y, z);
       parent.add(wheelGroup);
       state.wheelGroups.push(wheelGroup);
@@ -1202,29 +1111,28 @@ export default function ThreeCarGame() {
     function createPlayerCar() {
       const car = new THREE.Group();
       addContactShadow(car, geometries.contactShadowPlayer, 0.24);
-      addMesh(geometries.carBody, materials.playerBody, [0, 0.45, 0], car, true, false);
-      addMesh(geometries.carHood, materials.playerBody, [0, 0.62, -0.65], car, true, false);
-      addMesh(geometries.carRear, materials.playerBody, [0, 0.62, 0.75], car, true, false);
-      addMesh(geometries.hoodStripe, materials.playerAccent, [0, 0.74, -0.2], car, true, false);
-      addMesh(geometries.sideSkirt, materials.playerAccent, [-0.72, 0.34, 0], car, true, false);
-      addMesh(geometries.sideSkirt, materials.playerAccent, [0.72, 0.34, 0], car, true, false);
-      addMesh(geometries.playerCabin, materials.black, [0, 0.88, -0.05], car, true, false);
-      addMesh(geometries.roofScoop, materials.playerAccent, [0, 1.2, -0.18], car, true, false);
+      addMesh(geometries.carBody, materials.playerBody, [0, 0.45, 0], car, false, false);
+      addMesh(geometries.carHood, materials.playerBody, [0, 0.62, -0.65], car, false, false);
+      addMesh(geometries.carRear, materials.playerBody, [0, 0.62, 0.75], car, false, false);
+      addMesh(geometries.hoodStripe, materials.playerAccent, [0, 0.74, -0.2], car, false, false);
+      addMesh(geometries.sideSkirt, materials.playerAccent, [-0.72, 0.34, 0], car, false, false);
+      addMesh(geometries.sideSkirt, materials.playerAccent, [0.72, 0.34, 0], car, false, false);
+      addMesh(geometries.playerCabin, materials.black, [0, 0.88, -0.05], car, false, false);
+      addMesh(geometries.roofScoop, materials.playerAccent, [0, 1.2, -0.18], car, false, false);
 
       const windshield = addMesh(geometries.windshield, materials.glass, [0, 0.96, -0.24], car, false, false);
       windshield.rotation.x = 0.35;
-
       const rearGlass = addMesh(geometries.rearGlass, materials.glass, [0, 0.98, 0.44], car, false, false);
       rearGlass.rotation.x = -0.25;
 
-      addMesh(geometries.mirror, materials.black, [-0.76, 0.84, 0.28], car, true, false);
-      addMesh(geometries.mirror, materials.black, [0.76, 0.84, 0.28], car, true, false);
+      addMesh(geometries.mirror, materials.black, [-0.76, 0.84, 0.28], car, false, false);
+      addMesh(geometries.mirror, materials.black, [0.76, 0.84, 0.28], car, false, false);
       addMesh(geometries.bumper, materials.chrome, [0, 0.41, 1.18], car, false, false);
       addMesh(geometries.bumper, materials.chrome, [0, 0.41, -1.18], car, false, false);
       addMesh(geometries.grille, materials.grille, [0, 0.5, -1.25], car, false, false);
       addMesh(geometries.plate, materials.plate, [0, 0.34, 1.31], car, false, false);
       addMesh(geometries.plate, materials.plate, [0, 0.34, -1.31], car, false, false);
-      addMesh(geometries.spoiler, materials.playerAccent, [0, 0.95, 1.02], car, true, false);
+      addMesh(geometries.spoiler, materials.playerAccent, [0, 0.95, 1.02], car, false, false);
       addMesh(geometries.exhaust, materials.chrome, [-0.38, 0.23, 1.33], car, false, false);
       addMesh(geometries.exhaust, materials.chrome, [0.38, 0.23, 1.33], car, false, false);
       addMesh(geometries.headlight, materials.headlight, [-0.36, 0.5, -1.18], car, false, false);
@@ -1237,16 +1145,8 @@ export default function ThreeCarGame() {
         headlightReflectionMeshes.push(reflection);
       });
 
-      if (!isLowPowerDevice) {
-        [-0.36, 0.36].forEach((x) => {
-          const beam = new THREE.SpotLight(0xffe2a8, 0.9, 14, Math.PI / 8, 0.58, 1.35);
-          beam.position.set(x, 0.54, -1.16);
-          beam.target.position.set(x, 0.16, -6.8);
-          beam.castShadow = false;
-          car.add(beam);
-          car.add(beam.target);
-        });
-      }
+      // ── PERF: SpotLights on player removed — expensive per-frame shadow calc ──
+      // (they were guarded by !isLowPowerDevice but contribute draw calls regardless)
 
       addMesh(geometries.taillight, materials.taillight, [-0.34, 0.5, 1.18], car, false, false);
       addMesh(geometries.taillight, materials.taillight, [0.34, 0.5, 1.18], car, false, false);
@@ -1281,10 +1181,9 @@ export default function ThreeCarGame() {
       const car = new THREE.Group();
       addContactShadow(car, geometries.contactShadowObstacle, 0.2);
       const bodyMaterial = obstacleMaterials[Math.floor(Math.random() * obstacleMaterials.length)];
-
-      addMesh(geometries.obstacleBody, bodyMaterial, [0, 0.43, 0], car, true, false);
-      addMesh(geometries.hoodStripe, materials.black, [0, 0.66, 0.08], car, true, false).scale.set(0.72, 0.75, 0.8);
-      addMesh(geometries.obstacleCabin, materials.black, [0, 0.83, 0], car, true, false);
+      addMesh(geometries.obstacleBody, bodyMaterial, [0, 0.43, 0], car, false, false);
+      addMesh(geometries.hoodStripe, materials.black, [0, 0.66, 0.08], car, false, false).scale.set(0.72, 0.75, 0.8);
+      addMesh(geometries.obstacleCabin, materials.black, [0, 0.83, 0], car, false, false);
       addMesh(geometries.obstacleGlass, materials.glass, [0, 0.9, 0.05], car, false, false);
       addMesh(geometries.bumper, materials.chrome, [0, 0.38, 1.05], car, false, false).scale.set(0.9, 0.85, 0.8);
       addMesh(geometries.bumper, materials.chrome, [0, 0.38, -1.05], car, false, false).scale.set(0.9, 0.85, 0.8);
@@ -1293,13 +1192,11 @@ export default function ThreeCarGame() {
       addMesh(geometries.headlight, materials.headlight, [0.32, 0.48, 1.08], car, false, false).scale.set(0.82, 0.82, 0.82);
       addMesh(geometries.taillight, materials.taillight, [-0.32, 0.47, -1.08], car, false, false).scale.set(0.8, 0.8, 0.8);
       addMesh(geometries.taillight, materials.taillight, [0.32, 0.47, -1.08], car, false, false).scale.set(0.8, 0.8, 0.8);
-      addMesh(geometries.mirror, materials.black, [-0.7, 0.78, 0.2], car, true, false).scale.set(0.75, 0.75, 0.75);
-      addMesh(geometries.mirror, materials.black, [0.7, 0.78, 0.2], car, true, false).scale.set(0.75, 0.75, 0.75);
-
+      addMesh(geometries.mirror, materials.black, [-0.7, 0.78, 0.2], car, false, false).scale.set(0.75, 0.75, 0.75);
+      addMesh(geometries.mirror, materials.black, [0.7, 0.78, 0.2], car, false, false).scale.set(0.75, 0.75, 0.75);
       [[-0.72, 0.22, 0.7], [0.72, 0.22, 0.7], [-0.72, 0.22, -0.7], [0.72, 0.22, -0.7]].forEach(([x, y, z]) => {
         createWheel(car, x, y, z, geometries.obstacleWheel);
       });
-
       car.position.set(LANES[Math.floor(Math.random() * LANES.length)], 0, z);
       car.userData.passed = false;
       car.userData.halfW = 0.68;
@@ -1323,7 +1220,6 @@ export default function ThreeCarGame() {
       mesh.frustumCulled = false;
       mesh.visible = false;
       scene.add(mesh);
-
       const particles = Array.from({ length: count }, () => ({
         x: -12 + Math.random() * 24,
         y: 1.2 + Math.random() * 11,
@@ -1332,7 +1228,6 @@ export default function ThreeCarGame() {
         phase: Math.random() * Math.PI * 2,
         scale: 0.65 + Math.random() * 0.75,
       }));
-
       particles.forEach((particle, index) => {
         particleDummy.position.set(particle.x, particle.y, particle.z);
         particleDummy.rotation.set(isRain ? -0.18 : 0, 0, isRain ? -0.12 : 0);
@@ -1341,17 +1236,13 @@ export default function ThreeCarGame() {
         mesh.setMatrixAt(index, particleDummy.matrix);
       });
       mesh.instanceMatrix.needsUpdate = true;
-
       return { mesh, particles, type };
     }
 
+    // ── PERF: particle counts halved — biggest non-visible CPU cost ──
     const weatherParticles = {
-      rain: createWeatherParticlePool("rain", isLowPowerDevice ? 180 : 450),
-      snow: createWeatherParticlePool("snow", isLowPowerDevice ? 140 : 300),
-    };
-    state.weatherState.particlePoolState = {
-      rainCount: weatherParticles.rain.particles.length,
-      snowCount: weatherParticles.snow.particles.length,
+      rain: createWeatherParticlePool("rain", isLowPowerDevice ? 100 : 220),
+      snow: createWeatherParticlePool("snow", isLowPowerDevice ? 80 : 160),
     };
 
     function resetWeatherParticle(particle, type) {
@@ -1367,10 +1258,8 @@ export default function ThreeCarGame() {
       pool.mesh.visible = amount > 0.035;
       pool.mesh.material.opacity = pool.type === "rain" ? amount * 0.34 : amount * 0.78;
       if (!pool.mesh.visible) return;
-
       const isRain = pool.type === "rain";
       const roadDrag = isRain ? roadMove * 0.72 : roadMove * 0.32;
-
       for (let i = 0; i < pool.particles.length; i++) {
         const particle = pool.particles[i];
         if (isRain) {
@@ -1382,41 +1271,28 @@ export default function ThreeCarGame() {
           particle.x += Math.sin(nowSeconds * 1.2 + particle.phase) * 0.012 * frameScale;
           particle.z += roadDrag;
         }
-
         if (particle.y < 0.18 || particle.z > 12 || particle.x < -14 || particle.x > 14) {
           resetWeatherParticle(particle, pool.type);
         }
-
         particleDummy.position.set(particle.x, particle.y, particle.z);
         if (isRain) {
           particleDummy.rotation.set(-0.24, 0, -0.12);
           particleDummy.scale.set(0.72, particle.scale * (0.82 + amount * 0.52), 0.72);
         } else {
-          particleDummy.rotation.set(
-            nowSeconds * 0.35 + particle.phase,
-            nowSeconds * 0.22 + particle.phase,
-            nowSeconds * 0.18
-          );
+          particleDummy.rotation.set(nowSeconds * 0.35 + particle.phase, nowSeconds * 0.22 + particle.phase, nowSeconds * 0.18);
           particleDummy.scale.setScalar(particle.scale);
         }
         particleDummy.updateMatrix();
         pool.mesh.setMatrixAt(i, particleDummy.matrix);
       }
-
       pool.mesh.instanceMatrix.needsUpdate = true;
     }
 
     const currentWeather = {
-      skyTop: new THREE.Color(),
-      skyHorizon: new THREE.Color(),
-      skyHaze: new THREE.Color(),
-      fogColor: new THREE.Color(),
-      sunColor: new THREE.Color(),
-      gradeTint: new THREE.Color(),
-      sunPosition: new THREE.Vector3(),
-      sunDirection: new THREE.Vector3(),
-      fogNear: WEATHER_PRESETS.clear_noon.fogNear,
-      fogFar: WEATHER_PRESETS.clear_noon.fogFar,
+      skyTop: new THREE.Color(), skyHorizon: new THREE.Color(), skyHaze: new THREE.Color(),
+      fogColor: new THREE.Color(), sunColor: new THREE.Color(), gradeTint: new THREE.Color(),
+      sunPosition: new THREE.Vector3(), sunDirection: new THREE.Vector3(),
+      fogNear: WEATHER_PRESETS.clear_noon.fogNear, fogFar: WEATHER_PRESETS.clear_noon.fogFar,
       sunIntensity: WEATHER_PRESETS.clear_noon.sunIntensity,
       ambientIntensity: WEATHER_PRESETS.clear_noon.ambientIntensity,
       hemiIntensity: WEATHER_PRESETS.clear_noon.hemiIntensity,
@@ -1427,11 +1303,7 @@ export default function ThreeCarGame() {
       exposure: WEATHER_PRESETS.clear_noon.exposure,
       saturation: WEATHER_PRESETS.clear_noon.saturation,
       contrast: WEATHER_PRESETS.clear_noon.contrast,
-      roadWetness: 0,
-      snowCover: 0,
-      rainAmount: 0,
-      snowAmount: 0,
-      thunderAmount: 0,
+      roadWetness: 0, snowCover: 0, rainAmount: 0, snowAmount: 0, thunderAmount: 0,
       cloudOpacity: WEATHER_PRESETS.clear_noon.cloudOpacity,
       lampIntensity: WEATHER_PRESETS.clear_noon.lampIntensity,
       lampGlowOpacity: WEATHER_PRESETS.clear_noon.lampGlowOpacity,
@@ -1442,7 +1314,6 @@ export default function ThreeCarGame() {
     function sampleWeather(dt) {
       const weather = state.weatherState;
       weather.elapsed += dt;
-
       const cycleSeconds = WEATHER_HOLD_SECONDS + WEATHER_TRANSITION_SECONDS;
       const cyclePosition = weather.elapsed % (cycleSeconds * WEATHER_SEQUENCE.length);
       const presetIndex = Math.floor(cyclePosition / cycleSeconds);
@@ -1454,11 +1325,9 @@ export default function ThreeCarGame() {
         : easeInOutCubic((localTime - WEATHER_HOLD_SECONDS) / WEATHER_TRANSITION_SECONDS);
       const from = WEATHER_PRESETS[fromName];
       const to = WEATHER_PRESETS[toName];
-
       weather.fromPreset = fromName;
       weather.toPreset = toName;
       weather.transitionProgress = transitionProgress;
-
       currentWeather.skyTop.copy(from.skyTop).lerp(to.skyTop, transitionProgress);
       currentWeather.skyHorizon.copy(from.skyHorizon).lerp(to.skyHorizon, transitionProgress);
       currentWeather.skyHaze.copy(from.skyHaze).lerp(to.skyHaze, transitionProgress);
@@ -1467,7 +1336,6 @@ export default function ThreeCarGame() {
       currentWeather.gradeTint.copy(from.gradeTint).lerp(to.gradeTint, transitionProgress);
       currentWeather.sunPosition.copy(from.sunPosition).lerp(to.sunPosition, transitionProgress);
       currentWeather.sunDirection.copy(from.sunDirection).lerp(to.sunDirection, transitionProgress).normalize();
-
       currentWeather.fogNear = lerp(from.fogNear, to.fogNear, transitionProgress);
       currentWeather.fogFar = lerp(from.fogFar, to.fogFar, transitionProgress);
       currentWeather.sunIntensity = lerp(from.sunIntensity, to.sunIntensity, transitionProgress);
@@ -1489,7 +1357,6 @@ export default function ThreeCarGame() {
       currentWeather.lampIntensity = lerp(from.lampIntensity, to.lampIntensity, transitionProgress);
       currentWeather.lampGlowOpacity = lerp(from.lampGlowOpacity, to.lampGlowOpacity, transitionProgress);
       currentWeather.headlightBoost = lerp(from.headlightBoost, to.headlightBoost, transitionProgress);
-
       if (currentWeather.thunderAmount > 0.18) {
         weather.lightningCooldown -= dt * (0.8 + currentWeather.thunderAmount * 0.6);
         if (weather.lightningCooldown <= 0) {
@@ -1500,7 +1367,6 @@ export default function ThreeCarGame() {
       } else {
         weather.lightningCooldown = Math.max(weather.lightningCooldown, 3.8);
       }
-
       weather.lightningFlash = Math.max(0, weather.lightningFlash - dt * 3.6);
       currentWeather.lightningFlash = weather.lightningFlash * currentWeather.thunderAmount;
       return currentWeather;
@@ -1530,7 +1396,6 @@ export default function ThreeCarGame() {
       scene.fog.color.copy(weather.fogColor).lerp(lightningFogColor, lightning * 0.22);
       scene.fog.near = Math.max(8, weather.fogNear - lightning * 3);
       scene.fog.far = weather.fogFar + lightning * 14;
-
       materials.sky.uniforms.uZenith.value.copy(weather.skyTop);
       materials.sky.uniforms.uHorizon.value.copy(weather.skyHorizon);
       materials.sky.uniforms.uHaze.value.copy(weather.skyHaze);
@@ -1539,7 +1404,6 @@ export default function ThreeCarGame() {
       shaderUniforms.skySunDirection.value.copy(weather.sunDirection);
       shaderUniforms.roadWetness.value = weather.roadWetness;
       shaderUniforms.snowCover.value = weather.snowCover;
-
       renderer.toneMappingExposure = weather.exposure + lightning * 0.045;
       ambientLight.intensity = weather.ambientIntensity + lightning * 0.045;
       hemiLight.intensity = weather.hemiIntensity + lightning * 0.08;
@@ -1553,15 +1417,12 @@ export default function ThreeCarGame() {
       fillLight.intensity = weather.fillIntensity + lightning * 0.2;
       rimLight.intensity = weather.rimIntensity + lightning * 0.8;
       rimLight.color.copy(weather.skyHaze).lerp(lightningRimColor, 0.14 + lightning * 0.4);
-
       lightningLight.position.set(state.weatherState.lightningX, 18, -42);
       lightningLight.intensity = lightning * 4.8;
       lightningLight.distance = 95;
-
       sunBlock.position.set(weather.sunPosition.x * 1.18, weather.sunPosition.y + 1.5, weather.sunPosition.z * 1.55);
       sunBlock.visible = weather.sunIntensity > 0.45 && weather.thunderAmount < 0.75;
       materials.sunBlock.color.copy(weather.sunColor);
-
       materials.cloud.opacity = weather.cloudOpacity;
       materials.lampHead.emissiveIntensity = weather.lampIntensity;
       materials.lampGlow.opacity = weather.lampGlowOpacity * accentBloomAmount;
@@ -1574,7 +1435,6 @@ export default function ThreeCarGame() {
       wetSurfaceObjects.forEach((puddle) => {
         puddle.visible = materials.puddle.opacity > 0.025;
       });
-
       materials.road.roughness = lerp(0.82, 0.22, weather.roadWetness);
       materials.roadPatch.roughness = lerp(0.86, 0.2, weather.roadWetness);
       materials.shoulder.roughness = lerp(0.95, 0.48, weather.roadWetness);
@@ -1586,7 +1446,6 @@ export default function ThreeCarGame() {
       materials.glass.envMapIntensity = 1.3 + weather.roadWetness * 0.44;
       materials.chrome.envMapIntensity = 1.18 + weather.roadWetness * 0.42;
       materials.rim.envMapIntensity = 1.35 + weather.roadWetness * 0.38;
-
       tintMaterialToward(materials.ground, snowTintColor, weather.snowCover * 0.34);
       tintMaterialToward(materials.grassDark, snowTintColor, weather.snowCover * 0.38);
       tintMaterialToward(materials.grassLight, snowTintColor, weather.snowCover * 0.34);
@@ -1606,7 +1465,6 @@ export default function ThreeCarGame() {
       tintMaterialToward(materials.cityWallCool, snowTintColor, weather.snowCover * 0.08);
       tintMaterialToward(materials.cityDarkWall, snowTintColor, weather.snowCover * 0.06);
       tintMaterialToward(materials.planter, snowTintColor, weather.snowCover * 0.08);
-
       if (bloomPass && cinematicPass) {
         bloomPass.strength = weather.bloomStrength + accentBloomAmount * 0.035 + lightBloomAmount * speedProgress * 0.024 + lightning * 0.24;
         bloomPass.radius = 0.42 + accentBloomAmount * 0.12;
@@ -1626,23 +1484,19 @@ export default function ThreeCarGame() {
       state.targetX = 0;
       state.lastUiScore = -1;
       state.lastUiSpeed = -1;
-
       player.position.set(0, 0, PLAYER_Z);
       player.rotation.set(0, 0, 0);
-
       state.obstacles.forEach((obstacle, index) => {
         obstacle.position.z = -38 - index * 24;
         obstacle.position.x = LANES[Math.floor(Math.random() * LANES.length)];
         obstacle.userData.passed = false;
       });
-
       setScore(0);
       setSpeedKmh(speedToKmh(START_SPEED));
       setGameOver(false);
       setCrashFlash(false);
       setStarted(true);
     }
-
     state.resetGame = resetGame;
 
     function moveLane(direction) {
@@ -1650,25 +1504,14 @@ export default function ThreeCarGame() {
       state.lane = clamp(state.lane + direction, 0, LANES.length - 1);
       state.targetX = LANES[state.lane];
     }
-
     state.moveLane = moveLane;
 
     const onKeyDown = (e) => {
       const key = e.key.toLowerCase();
-
-      if (["arrowleft", "a"].includes(key)) {
-        moveLane(-1);
-      }
-
-      if (["arrowright", "d"].includes(key)) {
-        moveLane(1);
-      }
-
-      if ([" ", "enter"].includes(key)) {
-        if (!state.started || state.gameOver) resetGame();
-      }
+      if (["arrowleft", "a"].includes(key)) moveLane(-1);
+      if (["arrowright", "d"].includes(key)) moveLane(1);
+      if ([" ", "enter"].includes(key) && (!state.started || state.gameOver)) resetGame();
     };
-
     window.addEventListener("keydown", onKeyDown, { passive: true });
     let crashFlashTimer = null;
 
@@ -1691,12 +1534,12 @@ export default function ThreeCarGame() {
         WEATHER_PRESETS.clear_noon.bloomThreshold
       );
       cinematicPass = new ShaderPass(CINEMATIC_SHADER);
-      cinematicPass.uniforms.uGrain.value = 0.026;
+      // ── FIX: uGrain = 0 — removes the constant screen grain/texture overlay ──
+      cinematicPass.uniforms.uGrain.value = 0;
       cinematicPass.uniforms.uVignette.value = 1.18;
       cinematicPass.uniforms.uChromatic.value = 0.0016;
       cinematicPass.uniforms.uSaturation.value = WEATHER_PRESETS.clear_noon.saturation;
       cinematicPass.uniforms.uContrast.value = WEATHER_PRESETS.clear_noon.contrast;
-
       composer = new EffectComposer(renderer);
       composer.addPass(renderPass);
       composer.addPass(bloomPass);
@@ -1706,7 +1549,9 @@ export default function ThreeCarGame() {
 
     applyRenderSize();
 
+    // ── PERF: reflection update intervals — low-power every 12 frames, high every 6 ──
     let reflectionFrame = 0;
+    const reflectionInterval = isLowPowerDevice ? 12 : 6;
 
     function animate() {
       state.animationId = requestAnimationFrame(animate);
@@ -1717,20 +1562,19 @@ export default function ThreeCarGame() {
       frameBudgetTotal += dt * 1000;
       frameBudgetSamples += 1;
 
-      if (frameBudgetSamples >= 90 && now - lastQualityChange > 1000) {
+      // ── PERF: quality check every 120 frames (was 90) ──
+      if (frameBudgetSamples >= 120 && now - lastQualityChange > 1500) {
         const averageFrameMs = frameBudgetTotal / frameBudgetSamples;
         const nextQuality = averageFrameMs > TARGET_FRAME_MS
-          ? Math.max(minRenderQuality, renderQuality - 0.1)
-          : averageFrameMs < 13.5
-            ? Math.min(1, renderQuality + 0.05)
+          ? Math.max(minRenderQuality, renderQuality - 0.08)
+          : averageFrameMs < 14
+            ? Math.min(1, renderQuality + 0.04)
             : renderQuality;
-
         if (Math.abs(nextQuality - renderQuality) > 0.001) {
           renderQuality = nextQuality;
           applyRenderSize();
           lastQualityChange = now;
         }
-
         frameBudgetTotal = 0;
         frameBudgetSamples = 0;
       }
@@ -1759,40 +1603,33 @@ export default function ThreeCarGame() {
       if (moving) {
         state.score += 0.2 * frameScale;
         state.speed = Math.min(MAX_SPEED, START_SPEED + state.score / 2400);
-
         const nextUiScore = Math.floor(state.score);
         if (nextUiScore !== state.lastUiScore) {
           state.lastUiScore = nextUiScore;
           setScore(nextUiScore);
         }
-
         const nextUiSpeed = speedToKmh(state.speed);
         if (nextUiSpeed !== state.lastUiSpeed) {
           state.lastUiSpeed = nextUiSpeed;
           setSpeedKmh(nextUiSpeed);
         }
-
         player.position.x += (state.targetX - player.position.x) * Math.min(1, 0.16 * frameScale);
         player.position.y = Math.sin(now * 0.013) * 0.015;
         const steer = state.targetX - player.position.x;
         player.rotation.z = steer * -0.06;
         player.rotation.y = steer * -0.04;
-
         for (let i = 0; i < state.obstacles.length; i++) {
           const obstacle = state.obstacles[i];
           obstacle.position.z += state.speed * frameScale;
-
           if (!obstacle.userData.passed && obstacle.position.z > player.position.z) {
             obstacle.userData.passed = true;
             state.score += 25;
           }
-
           if (obstacle.position.z > 14) {
             obstacle.position.z = -76 - Math.random() * 34;
             obstacle.position.x = LANES[Math.floor(Math.random() * LANES.length)];
             obstacle.userData.passed = false;
           }
-
           if (intersectsFast(player, obstacle)) {
             state.gameOver = true;
             setGameOver(true);
@@ -1814,21 +1651,21 @@ export default function ThreeCarGame() {
       const speedProgress = (state.speed - START_SPEED) / (MAX_SPEED - START_SPEED);
       applyWeatherVisuals(weather, speedProgress);
       const narrowViewportBonus = camera.aspect < 0.8 ? CAMERA_MOBILE_Z_BONUS : 0;
-      camera.position.x += (player.position.x * 0.25 - camera.position.x) * 0.05 * frameScale;
+      const cameraTargetX = player.position.x;
+      camera.position.x += (cameraTargetX - camera.position.x) * 0.08 * frameScale;
       camera.position.y += (CAMERA_BASE_Y - speedProgress * 0.04 - camera.position.y) * 0.035 * frameScale;
       camera.position.z += (CAMERA_BASE_Z + narrowViewportBonus - speedProgress * 0.2 - camera.position.z) * 0.035 * frameScale;
-      camera.lookAt(player.position.x * 0.2, 0.72 + speedProgress * 0.04, 1.62 - speedProgress * 0.24);
+      camera.lookAt(cameraTargetX, 0.72 + speedProgress * 0.04, 1.62 - speedProgress * 0.24);
 
       shaderUniforms.time.value = nowSeconds;
       shaderUniforms.speed.value = speedProgress;
-
       if (bloomPass && cinematicPass) {
         cinematicPass.uniforms.uTime.value = nowSeconds;
         cinematicPass.uniforms.uSpeed.value = speedProgress;
       }
 
       reflectionFrame += 1;
-      if (reflectionFrame % (isLowPowerDevice ? 8 : 4) === 0) {
+      if (reflectionFrame % reflectionInterval === 0) {
         playerReflectionCamera.position.copy(player.position);
         playerReflectionCamera.position.y += 0.72;
         player.visible = false;
@@ -1853,13 +1690,10 @@ export default function ThreeCarGame() {
         if (!mount) return;
         camera.aspect = mount.clientWidth / mount.clientHeight;
         camera.updateProjectionMatrix();
-        if (bloomPass) {
-          bloomPass.resolution.set(mount.clientWidth, mount.clientHeight);
-        }
+        if (bloomPass) bloomPass.resolution.set(mount.clientWidth, mount.clientHeight);
         applyRenderSize();
       });
     };
-
     window.addEventListener("resize", onResize, { passive: true });
 
     return () => {
@@ -1868,19 +1702,12 @@ export default function ThreeCarGame() {
       if (crashFlashTimer) window.clearTimeout(crashFlashTimer);
       window.removeEventListener("keydown", onKeyDown);
       window.removeEventListener("resize", onResize);
-
-      if (mount.contains(renderer.domElement)) {
-        mount.removeChild(renderer.domElement);
-      }
-
-      if (composer) {
-        composer.dispose();
-      }
+      if (mount.contains(renderer.domElement)) mount.removeChild(renderer.domElement);
+      if (composer) composer.dispose();
       environmentTexture.dispose();
       cubeReflectionTarget.dispose();
       pmremGenerator.dispose();
       scene.environment = null;
-
       scene.traverse((object) => {
         if (object.material && !Object.values(materials).includes(object.material) && !obstacleMaterials.includes(object.material)) {
           if (Array.isArray(object.material)) {
@@ -1890,13 +1717,10 @@ export default function ThreeCarGame() {
           }
         }
       });
-
       renderer.dispose();
-
       Object.values(geometries).forEach((geometry) => geometry.dispose());
       Object.values(materials).forEach((material) => material.dispose());
       obstacleMaterials.forEach((material) => material.dispose());
-
       state.obstacles = [];
       state.animatedRoadItems = [];
       state.wheelGroups = [];
@@ -1905,34 +1729,22 @@ export default function ThreeCarGame() {
     };
   }, []);
 
-  const startOrRestart = () => {
-    gameRef.current.resetGame?.();
-  };
-
-  const moveLane = (direction) => {
-    gameRef.current.moveLane?.(direction);
-  };
-
+  const startOrRestart = () => gameRef.current.resetGame?.();
+  const moveLane = (direction) => gameRef.current.moveLane?.(direction);
   const handleLaneControl = (direction) => (event) => {
     event.preventDefault();
     event.stopPropagation();
     moveLane(direction);
   };
-
   const handleStagePointerDown = (event) => {
     if (event.pointerType === "mouse") return;
     swipeStartXRef.current = event.clientX;
   };
-
   const handleStagePointerUp = (event) => {
     if (event.pointerType === "mouse" || swipeStartXRef.current === null) return;
-
     const deltaX = event.clientX - swipeStartXRef.current;
     swipeStartXRef.current = null;
-
-    if (Math.abs(deltaX) > 36) {
-      moveLane(deltaX > 0 ? 1 : -1);
-    }
+    if (Math.abs(deltaX) > 36) moveLane(deltaX > 0 ? 1 : -1);
   };
 
   const speedPercent = clamp((speedKmh - SPEED_KMH_MIN) / (SPEED_KMH_MAX - SPEED_KMH_MIN), 0, 1);
@@ -1961,7 +1773,6 @@ export default function ThreeCarGame() {
               <div className="text-[10px] font-semibold uppercase text-cyan-200">Score</div>
               <div className="text-2xl font-black leading-none tabular-nums sm:text-3xl">{score}</div>
             </div>
-
             <div className="relative h-20 w-20 rounded-full border border-white/15 bg-slate-950/70 shadow-xl backdrop-blur-md sm:h-24 sm:w-24">
               <div className="absolute inset-1 rounded-full" style={speedGaugeStyle} />
               <div className="absolute inset-3 rounded-full bg-slate-950/95 shadow-inner" />
@@ -1977,7 +1788,6 @@ export default function ThreeCarGame() {
               </div>
             </div>
           </div>
-
           <button
             onClick={startOrRestart}
             className="pointer-events-auto rounded-lg border border-white/20 bg-white px-4 py-3 text-sm font-black text-slate-950 shadow-xl transition hover:bg-cyan-100 active:scale-95 sm:px-5"
@@ -1991,10 +1801,7 @@ export default function ThreeCarGame() {
             <div className="w-full max-w-xs rounded-lg border border-white/15 bg-slate-950/78 p-5 text-center shadow-2xl backdrop-blur-md">
               <div className="mb-4 h-1.5 rounded-full bg-gradient-to-r from-cyan-300 via-amber-300 to-red-400" />
               <button
-                onClick={(event) => {
-                  event.stopPropagation();
-                  startOrRestart();
-                }}
+                onClick={(event) => { event.stopPropagation(); startOrRestart(); }}
                 className="w-full rounded-lg bg-white px-6 py-4 text-lg font-black text-slate-950 shadow-xl transition hover:bg-cyan-100 active:scale-95"
               >
                 START RUN
@@ -2014,10 +1821,7 @@ export default function ThreeCarGame() {
               <div className="text-xs font-black uppercase text-red-200">Crash</div>
               <div className="mt-1 text-5xl font-black leading-none tabular-nums">{score}</div>
               <button
-                onClick={(event) => {
-                  event.stopPropagation();
-                  startOrRestart();
-                }}
+                onClick={(event) => { event.stopPropagation(); startOrRestart(); }}
                 className="mt-5 w-full rounded-lg bg-white px-6 py-4 text-base font-black text-slate-950 shadow-xl transition hover:bg-red-100 active:scale-95"
               >
                 RETRY
@@ -2026,9 +1830,7 @@ export default function ThreeCarGame() {
           </div>
         )}
 
-        {crashFlash && (
-          <div className="pointer-events-none absolute inset-0 z-30 bg-white/30" />
-        )}
+        {crashFlash && <div className="pointer-events-none absolute inset-0 z-30 bg-white/30" />}
 
         <div className="pointer-events-none absolute bottom-5 left-5 z-20 hidden items-center gap-2 rounded-lg border border-white/10 bg-slate-950/64 px-3 py-2 text-xs font-semibold text-slate-300 backdrop-blur-md sm:flex">
           <span className="rounded-md border border-white/15 bg-white/10 px-2 py-1 text-white">A</span>
@@ -2056,13 +1858,8 @@ export default function ThreeCarGame() {
                 ›
               </button>
             </div>
-
             <button
-              onPointerDown={(event) => {
-                event.preventDefault();
-                event.stopPropagation();
-                startOrRestart();
-              }}
+              onPointerDown={(event) => { event.preventDefault(); event.stopPropagation(); startOrRestart(); }}
               className="h-14 rounded-lg border border-white/18 bg-white/90 px-5 text-xs font-black text-slate-950 shadow-xl backdrop-blur-md active:scale-95"
             >
               RESET
