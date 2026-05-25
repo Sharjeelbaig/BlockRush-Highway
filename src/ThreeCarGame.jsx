@@ -19,6 +19,15 @@ const SPEED_KMH_MIN = 68;
 const SPEED_KMH_MAX = 224;
 // ── PERF: raised budget tolerance so quality doesn't drop aggressively ──
 const TARGET_FRAME_MS = 22;
+const BLUR_TUNING = {
+  maxDesktopPixels: 5.6,
+  maxMobilePixels: 3.2,
+  speedFloor: 0.18,
+  speedCeiling: 0.82,
+  laneImpulse: 0.34,
+  weatherDepth: 0.24,
+  crashKick: 0.95,
+};
 // const CAMERA_BASE_Y = 3.85;
 const CAMERA_BASE_Y = 2.0;
 const CAMERA_BASE_Z = 12.95;
@@ -202,6 +211,14 @@ const CINEMATIC_SHADER = {
     uTint: { value: new THREE.Vector3(1, 1, 1) },
     uSaturation: { value: 1.12 },
     uContrast: { value: 1.08 },
+    uTexelSize: { value: new THREE.Vector2(1 / 1280, 1 / 720) },
+    uSpeedBlur: { value: 0 },
+    uDepthSoftness: { value: 0 },
+    uCrashBlur: { value: 0 },
+    uQuality: { value: 1 },
+    uBlurDirection: { value: new THREE.Vector2(0, 1) },
+    uMaxBlurPixels: { value: BLUR_TUNING.maxDesktopPixels },
+    uSampleTaps: { value: 5 },
   },
   vertexShader: `
     varying vec2 vUv;
@@ -220,7 +237,19 @@ const CINEMATIC_SHADER = {
     uniform vec3 uTint;
     uniform float uSaturation;
     uniform float uContrast;
+    uniform vec2 uTexelSize;
+    uniform float uSpeedBlur;
+    uniform float uDepthSoftness;
+    uniform float uCrashBlur;
+    uniform float uQuality;
+    uniform vec2 uBlurDirection;
+    uniform float uMaxBlurPixels;
+    uniform float uSampleTaps;
     varying vec2 vUv;
+
+    vec3 sampleRaw(vec2 uv) {
+      return texture2D(tDiffuse, clamp(uv, vec2(0.001), vec2(0.999))).rgb;
+    }
 
     vec3 cinematicGrade(vec3 color) {
       color = max(color, vec3(0.0));
@@ -235,11 +264,32 @@ const CINEMATIC_SHADER = {
 
     void main() {
       vec2 fromCenter = vUv - 0.5;
+      vec2 focusSpace = vec2(fromCenter.x * 1.45, vUv.y - 0.38);
+      float playerFocusMask = 1.0 - smoothstep(0.16, 0.46, length(focusSpace));
+      float nearRoadMask = 1.0 - smoothstep(0.02, 0.34, vUv.y);
+      float edgeMask = smoothstep(0.18, 0.62, abs(fromCenter.x));
+      float farMask = smoothstep(0.42, 0.92, vUv.y);
+      float protectedFocus = max(playerFocusMask, nearRoadMask * 0.72);
+      float speedMask = clamp(mix(0.52, 1.0, edgeMask) * (1.0 - protectedFocus * 0.86), 0.0, 1.0);
+      float depthMask = farMask * (1.0 - playerFocusMask * 0.92);
+      float blurMix = clamp(uSpeedBlur * speedMask + uDepthSoftness * depthMask + uCrashBlur * (0.72 + edgeMask * 0.28), 0.0, 1.0);
+      vec2 direction = normalize(uBlurDirection + vec2(0.0001, 0.0001));
+      float tapGate = smoothstep(3.5, 4.5, uSampleTaps);
+      float blurPixels = uMaxBlurPixels * blurMix * mix(0.45, 1.0, uQuality);
+      vec2 blurStep = direction * uTexelSize * blurPixels;
+
+      vec3 blurred = sampleRaw(vUv) * 0.34;
+      blurred += sampleRaw(vUv + blurStep * 0.72) * 0.19;
+      blurred += sampleRaw(vUv - blurStep * 0.72) * 0.19;
+      blurred += sampleRaw(vUv + blurStep * 1.55) * 0.14 * tapGate;
+      blurred += sampleRaw(vUv - blurStep * 1.55) * 0.14 * tapGate;
+      blurred /= 0.72 + 0.28 * tapGate;
+
       vec2 chromaOffset = fromCenter * uChromatic * (1.0 + uSpeed * 1.45);
 
-      float red   = texture2D(tDiffuse, vUv + chromaOffset).r;
-      float green = texture2D(tDiffuse, vUv).g;
-      float blue  = texture2D(tDiffuse, vUv - chromaOffset).b;
+      float red   = mix(texture2D(tDiffuse, vUv + chromaOffset).r, blurred.r, blurMix);
+      float green = mix(texture2D(tDiffuse, vUv).g, blurred.g, blurMix);
+      float blue  = mix(texture2D(tDiffuse, vUv - chromaOffset).b, blurred.b, blurMix);
       vec3 color = cinematicGrade(vec3(red, green, blue));
 
       float vignette = smoothstep(0.22, 0.78, length(fromCenter) * uVignette);
@@ -312,6 +362,8 @@ export default function ThreeCarGame() {
 
     let lastFrameTime = performance.now();
     let renderQuality = 1;
+    let blurQuality = 1;
+    let crashBlur = 0;
     let frameBudgetTotal = 0;
     let frameBudgetSamples = 0;
     let lastQualityChange = performance.now();
@@ -325,6 +377,7 @@ export default function ThreeCarGame() {
     const minRenderQuality = isLowPowerDevice ? 0.65 : 0.75;
     // ── PERF: lower pixel ratio ceiling reduces fill-rate pressure ──
     const maxPixelRatio = isLowPowerDevice ? 1.0 : 1.25;
+    const maxBlurPixels = isLowPowerDevice ? BLUR_TUNING.maxMobilePixels : BLUR_TUNING.maxDesktopPixels;
 
     const scene = new THREE.Scene();
     scene.background = WEATHER_PRESETS.clear_noon.skyTop.clone();
@@ -368,6 +421,8 @@ export default function ThreeCarGame() {
     scene.add(playerReflectionCamera);
 
     let composer = null;
+    let bloomPass = null;
+    let cinematicPass = null;
     const renderSize = new THREE.Vector2();
     function applyRenderSize() {
       if (!mount) return;
@@ -378,6 +433,9 @@ export default function ThreeCarGame() {
       if (composer) {
         composer.setPixelRatio(pixelRatio);
         composer.setSize(renderSize.x, renderSize.y);
+      }
+      if (cinematicPass) {
+        cinematicPass.uniforms.uTexelSize.value.set(1 / Math.max(1, renderSize.x), 1 / Math.max(1, renderSize.y));
       }
     }
 
@@ -1500,6 +1558,7 @@ export default function ThreeCarGame() {
       setGameOver(false);
       setCrashFlash(false);
       setStarted(true);
+      crashBlur = 0;
     }
     state.resetGame = resetGame;
 
@@ -1526,9 +1585,6 @@ export default function ThreeCarGame() {
       );
     }
 
-    let bloomPass = null;
-    let cinematicPass = null;
-
     if (enablePostProcessing) {
       const renderPass = new RenderPass(scene, camera);
       bloomPass = new UnrealBloomPass(
@@ -1544,6 +1600,8 @@ export default function ThreeCarGame() {
       cinematicPass.uniforms.uChromatic.value = 0.0016;
       cinematicPass.uniforms.uSaturation.value = WEATHER_PRESETS.clear_noon.saturation;
       cinematicPass.uniforms.uContrast.value = WEATHER_PRESETS.clear_noon.contrast;
+      cinematicPass.uniforms.uMaxBlurPixels.value = maxBlurPixels;
+      cinematicPass.uniforms.uSampleTaps.value = isLowPowerDevice ? 3 : 5;
       composer = new EffectComposer(renderer);
       composer.addPass(renderPass);
       composer.addPass(bloomPass);
@@ -1569,15 +1627,30 @@ export default function ThreeCarGame() {
       // ── PERF: quality check every 120 frames (was 90) ──
       if (frameBudgetSamples >= 120 && now - lastQualityChange > 1500) {
         const averageFrameMs = frameBudgetTotal / frameBudgetSamples;
-        const nextQuality = averageFrameMs > TARGET_FRAME_MS
-          ? Math.max(minRenderQuality, renderQuality - 0.08)
-          : averageFrameMs < 14
-            ? Math.min(1, renderQuality + 0.04)
-            : renderQuality;
-        if (Math.abs(nextQuality - renderQuality) > 0.001) {
-          renderQuality = nextQuality;
-          applyRenderSize();
-          lastQualityChange = now;
+        if (averageFrameMs > TARGET_FRAME_MS) {
+          if (blurQuality > 0.48) {
+            blurQuality = Math.max(0.45, blurQuality - 0.16);
+            lastQualityChange = now;
+          } else {
+            const nextQuality = Math.max(minRenderQuality, renderQuality - 0.08);
+            if (Math.abs(nextQuality - renderQuality) > 0.001) {
+              renderQuality = nextQuality;
+              applyRenderSize();
+              lastQualityChange = now;
+            }
+          }
+        } else if (averageFrameMs < 14) {
+          if (blurQuality < 1) {
+            blurQuality = Math.min(1, blurQuality + 0.08);
+            lastQualityChange = now;
+          } else {
+            const nextQuality = Math.min(1, renderQuality + 0.04);
+            if (Math.abs(nextQuality - renderQuality) > 0.001) {
+              renderQuality = nextQuality;
+              applyRenderSize();
+              lastQualityChange = now;
+            }
+          }
         }
         frameBudgetTotal = 0;
         frameBudgetSamples = 0;
@@ -1640,6 +1713,7 @@ export default function ThreeCarGame() {
           }
           if (intersectsFast(player, obstacle)) {
             state.gameOver = true;
+            crashBlur = BLUR_TUNING.crashKick;
             setGameOver(true);
             setCrashFlash(true);
             if (crashFlashTimer) window.clearTimeout(crashFlashTimer);
@@ -1661,6 +1735,7 @@ export default function ThreeCarGame() {
       const narrowViewportBonus = camera.aspect < 0.8 ? CAMERA_MOBILE_Z_BONUS : 0;
       const cameraTargetX = player.position.x;
       const cameraDeltaX = cameraTargetX - camera.position.x;
+      const laneBlur = clamp(Math.abs(cameraDeltaX) * BLUR_TUNING.laneImpulse, 0, 0.28);
       camera.position.x += cameraDeltaX * 0.08 * frameScale;
       if (Math.abs(cameraDeltaX) < 0.002) {
         camera.position.x = cameraTargetX;
@@ -1672,8 +1747,22 @@ export default function ThreeCarGame() {
       shaderUniforms.time.value = nowSeconds;
       shaderUniforms.speed.value = speedProgress;
       if (bloomPass && cinematicPass) {
+        const speedBlur = clamp(
+          (speedProgress - BLUR_TUNING.speedFloor) / (BLUR_TUNING.speedCeiling - BLUR_TUNING.speedFloor),
+          0,
+          1
+        );
+        const weatherDepth = Math.max(weather.rainAmount * 0.72, weather.thunderAmount, weather.snowAmount * 0.62);
+        const depthSoftness = clamp(weatherDepth * BLUR_TUNING.weatherDepth * blurQuality, 0, isLowPowerDevice ? 0.12 : 0.24);
+        const blurDirectionX = clamp(cameraDeltaX * 0.18, -0.35, 0.35);
+        crashBlur = Math.max(0, crashBlur - dt * 3.4);
         cinematicPass.uniforms.uTime.value = nowSeconds;
         cinematicPass.uniforms.uSpeed.value = speedProgress;
+        cinematicPass.uniforms.uSpeedBlur.value = clamp((speedBlur * 0.54 + laneBlur) * blurQuality, 0, isLowPowerDevice ? 0.46 : 0.72);
+        cinematicPass.uniforms.uDepthSoftness.value = depthSoftness;
+        cinematicPass.uniforms.uCrashBlur.value = crashBlur;
+        cinematicPass.uniforms.uQuality.value = blurQuality;
+        cinematicPass.uniforms.uBlurDirection.value.set(blurDirectionX, 1).normalize();
       }
 
       reflectionFrame += 1;
