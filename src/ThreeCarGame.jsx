@@ -16,9 +16,174 @@ const MAX_SPEED = 0.52;
 const SPEED_KMH_MIN = 68;
 const SPEED_KMH_MAX = 224;
 const TARGET_FRAME_MS = 18.5;
-const CAMERA_BASE_Y = 6.65;
-const CAMERA_BASE_Z = 12.35;
-const CAMERA_MOBILE_Z_BONUS = 1.25;
+const CAMERA_BASE_Y = 3.85;
+const CAMERA_BASE_Z = 12.95;
+const CAMERA_MOBILE_Z_BONUS = 3.15;
+const WEATHER_HOLD_SECONDS = 35;
+const WEATHER_TRANSITION_SECONDS = 8;
+const WEATHER_SEQUENCE = ["clear_noon", "sunny_golden_hour", "rain_dusk", "thunder_night", "snow_dawn"];
+const WEATHER_PRESETS = {
+  clear_noon: {
+    skyTop: new THREE.Color(0x3b9fe0),
+    skyHorizon: new THREE.Color(0x94c9df),
+    skyHaze: new THREE.Color(0x8bb8ca),
+    fogColor: new THREE.Color(0x8ab8c8),
+    fogNear: 92,
+    fogFar: 215,
+    sunColor: new THREE.Color(0xffe0a7),
+    sunIntensity: 2.35,
+    sunPosition: new THREE.Vector3(-15, 22, 13),
+    sunDirection: new THREE.Vector3(-0.5, 0.72, 0.22).normalize(),
+    ambientIntensity: 0.24,
+    hemiIntensity: 0.68,
+    fillIntensity: 0.22,
+    rimIntensity: 0.42,
+    bloomStrength: 0.055,
+    bloomThreshold: 1.16,
+    exposure: 0.82,
+    saturation: 1.08,
+    contrast: 1.12,
+    gradeTint: new THREE.Color(0xf2fbff),
+    roadWetness: 0,
+    snowCover: 0,
+    rainAmount: 0,
+    snowAmount: 0,
+    thunderAmount: 0,
+    particleType: "none",
+    cloudOpacity: 0.34,
+    lampIntensity: 0.12,
+    lampGlowOpacity: 0.012,
+    headlightBoost: 0.08,
+  },
+  sunny_golden_hour: {
+    skyTop: new THREE.Color(0x3e95d2),
+    skyHorizon: new THREE.Color(0xdf9f68),
+    skyHaze: new THREE.Color(0xc9956f),
+    fogColor: new THREE.Color(0xc89368),
+    fogNear: 72,
+    fogFar: 190,
+    sunColor: new THREE.Color(0xffb55e),
+    sunIntensity: 2.6,
+    sunPosition: new THREE.Vector3(-24, 12, -24),
+    sunDirection: new THREE.Vector3(-0.74, 0.36, -0.34).normalize(),
+    ambientIntensity: 0.19,
+    hemiIntensity: 0.56,
+    fillIntensity: 0.16,
+    rimIntensity: 0.58,
+    bloomStrength: 0.075,
+    bloomThreshold: 1.08,
+    exposure: 0.86,
+    saturation: 1.14,
+    contrast: 1.15,
+    gradeTint: new THREE.Color(0xffead0),
+    roadWetness: 0,
+    snowCover: 0,
+    rainAmount: 0,
+    snowAmount: 0,
+    thunderAmount: 0,
+    particleType: "none",
+    cloudOpacity: 0.28,
+    lampIntensity: 0.14,
+    lampGlowOpacity: 0.018,
+    headlightBoost: 0.1,
+  },
+  rain_dusk: {
+    skyTop: new THREE.Color(0x30445f),
+    skyHorizon: new THREE.Color(0xb07b66),
+    skyHaze: new THREE.Color(0x7895a8),
+    fogColor: new THREE.Color(0x758899),
+    fogNear: 24,
+    fogFar: 104,
+    sunColor: new THREE.Color(0xff9868),
+    sunIntensity: 1.35,
+    sunPosition: new THREE.Vector3(-18, 7.5, -28),
+    sunDirection: new THREE.Vector3(-0.62, 0.22, -0.42).normalize(),
+    ambientIntensity: 0.18,
+    hemiIntensity: 0.5,
+    fillIntensity: 0.14,
+    rimIntensity: 0.76,
+    bloomStrength: 0.3,
+    bloomThreshold: 0.82,
+    exposure: 0.78,
+    saturation: 0.96,
+    contrast: 1.13,
+    gradeTint: new THREE.Color(0xdce9ff),
+    roadWetness: 0.82,
+    snowCover: 0,
+    rainAmount: 1,
+    snowAmount: 0,
+    thunderAmount: 0.08,
+    particleType: "rain",
+    cloudOpacity: 0.82,
+    lampIntensity: 1.35,
+    lampGlowOpacity: 0.1,
+    headlightBoost: 0.56,
+  },
+  thunder_night: {
+    skyTop: new THREE.Color(0x071022),
+    skyHorizon: new THREE.Color(0x152940),
+    skyHaze: new THREE.Color(0x3d5270),
+    fogColor: new THREE.Color(0x425165),
+    fogNear: 13,
+    fogFar: 76,
+    sunColor: new THREE.Color(0x83b3ff),
+    sunIntensity: 0.3,
+    sunPosition: new THREE.Vector3(10, 10, -36),
+    sunDirection: new THREE.Vector3(0.16, 0.24, -0.76).normalize(),
+    ambientIntensity: 0.075,
+    hemiIntensity: 0.18,
+    fillIntensity: 0.06,
+    rimIntensity: 1.05,
+    bloomStrength: 0.48,
+    bloomThreshold: 0.72,
+    exposure: 0.64,
+    saturation: 0.82,
+    contrast: 1.22,
+    gradeTint: new THREE.Color(0xc7dcff),
+    roadWetness: 1,
+    snowCover: 0,
+    rainAmount: 0.95,
+    snowAmount: 0,
+    thunderAmount: 1,
+    particleType: "rain",
+    cloudOpacity: 0.9,
+    lampIntensity: 2.35,
+    lampGlowOpacity: 0.2,
+    headlightBoost: 0.98,
+  },
+  snow_dawn: {
+    skyTop: new THREE.Color(0x9fc8e4),
+    skyHorizon: new THREE.Color(0xffd6bd),
+    skyHaze: new THREE.Color(0xb9cbd5),
+    fogColor: new THREE.Color(0xaec0ca),
+    fogNear: 42,
+    fogFar: 145,
+    sunColor: new THREE.Color(0xffc2a2),
+    sunIntensity: 1.55,
+    sunPosition: new THREE.Vector3(-10, 9, -18),
+    sunDirection: new THREE.Vector3(-0.34, 0.32, -0.52).normalize(),
+    ambientIntensity: 0.42,
+    hemiIntensity: 0.78,
+    fillIntensity: 0.28,
+    rimIntensity: 0.66,
+    bloomStrength: 0.14,
+    bloomThreshold: 0.94,
+    exposure: 0.82,
+    saturation: 0.86,
+    contrast: 1.06,
+    gradeTint: new THREE.Color(0xebf6ff),
+    roadWetness: 0.16,
+    snowCover: 0.72,
+    rainAmount: 0,
+    snowAmount: 1,
+    thunderAmount: 0,
+    particleType: "snow",
+    cloudOpacity: 0.58,
+    lampIntensity: 0.46,
+    lampGlowOpacity: 0.055,
+    headlightBoost: 0.22,
+  },
+};
 
 const CINEMATIC_SHADER = {
   uniforms: {
@@ -28,6 +193,9 @@ const CINEMATIC_SHADER = {
     uGrain: { value: 0.028 },
     uVignette: { value: 1.18 },
     uChromatic: { value: 0.0016 },
+    uTint: { value: new THREE.Vector3(1, 1, 1) },
+    uSaturation: { value: 1.12 },
+    uContrast: { value: 1.08 },
   },
   vertexShader: `
     varying vec2 vUv;
@@ -44,6 +212,9 @@ const CINEMATIC_SHADER = {
     uniform float uGrain;
     uniform float uVignette;
     uniform float uChromatic;
+    uniform vec3 uTint;
+    uniform float uSaturation;
+    uniform float uContrast;
     varying vec2 vUv;
 
     float hash21(vec2 p) {
@@ -57,9 +228,10 @@ const CINEMATIC_SHADER = {
       color = pow(color, vec3(0.93));
 
       float luma = dot(color, vec3(0.2126, 0.7152, 0.0722));
-      color = mix(vec3(luma), color, 1.16);
-      color = (color - 0.5) * 1.08 + 0.5;
-      color += vec3(0.018, 0.006, 0.012);
+      color = mix(vec3(luma), color, uSaturation);
+      color = (color - 0.5) * uContrast + 0.5;
+      color *= uTint;
+      color += vec3(0.012, 0.006, 0.008);
       return max(color, vec3(0.0));
     }
 
@@ -87,6 +259,15 @@ function clamp(value, min, max) {
   return Math.min(max, Math.max(min, value));
 }
 
+function lerp(start, end, progress) {
+  return start + (end - start) * progress;
+}
+
+function easeInOutCubic(value) {
+  const t = clamp(value, 0, 1);
+  return t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
+}
+
 function speedToKmh(speed) {
   const speedProgress = (speed - START_SPEED) / (MAX_SPEED - START_SPEED);
   return Math.round(SPEED_KMH_MIN + clamp(speedProgress, 0, 1) * (SPEED_KMH_MAX - SPEED_KMH_MIN));
@@ -105,6 +286,7 @@ export default function ThreeCarGame() {
     obstacles: [],
     animatedRoadItems: [],
     wheelGroups: [],
+    weatherState: null,
     animationId: null,
     resetGame: null,
     moveLane: null,
@@ -126,6 +308,15 @@ export default function ThreeCarGame() {
     state.animatedRoadItems = [];
     state.obstacles = [];
     state.wheelGroups = [];
+    state.weatherState = {
+      elapsed: 0,
+      fromPreset: WEATHER_SEQUENCE[0],
+      toPreset: WEATHER_SEQUENCE[1],
+      transitionProgress: 0,
+      lightningCooldown: 5.5,
+      lightningFlash: 0,
+      lightningX: 0,
+    };
 
     let lastFrameTime = performance.now();
     let renderQuality = 1;
@@ -134,26 +325,29 @@ export default function ThreeCarGame() {
     let lastQualityChange = performance.now();
 
     const isTouchDevice = window.matchMedia("(pointer: coarse)").matches;
-    const prefersReducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
     const hardwareThreads = navigator.hardwareConcurrency || 8;
     const deviceMemory = navigator.deviceMemory || 8;
     const isLowPowerDevice = isTouchDevice || hardwareThreads <= 4 || deviceMemory <= 4;
-    const enablePostProcessing = !isLowPowerDevice && !prefersReducedMotion;
-    const minRenderQuality = isLowPowerDevice ? 0.68 : 0.76;
-    const maxPixelRatio = isLowPowerDevice ? 1 : 1.3;
+    const enablePostProcessing = true;
+    const minRenderQuality = isLowPowerDevice ? 0.72 : 0.82;
+    const maxPixelRatio = isLowPowerDevice ? 1.15 : 1.5;
 
     const scene = new THREE.Scene();
-    scene.background = new THREE.Color(0x8fd0ff);
-    scene.fog = new THREE.Fog(0xa9dcff, 34, 132);
+    scene.background = WEATHER_PRESETS.clear_noon.skyTop.clone();
+    scene.fog = new THREE.Fog(
+      WEATHER_PRESETS.clear_noon.fogColor.getHex(),
+      WEATHER_PRESETS.clear_noon.fogNear,
+      WEATHER_PRESETS.clear_noon.fogFar
+    );
 
     const camera = new THREE.PerspectiveCamera(
-      60,
+      58,
       mount.clientWidth / mount.clientHeight,
       0.1,
       200
     );
     camera.position.set(0, CAMERA_BASE_Y, CAMERA_BASE_Z + (mount.clientWidth < 700 ? CAMERA_MOBILE_Z_BONUS : 0));
-    camera.lookAt(0, 1.05, -5.6);
+    camera.lookAt(0, 0.72, 1.62);
 
     const renderer = new THREE.WebGLRenderer({
       antialias: !isLowPowerDevice,
@@ -169,6 +363,12 @@ export default function ThreeCarGame() {
     const pmremGenerator = new THREE.PMREMGenerator(renderer);
     const environmentTexture = pmremGenerator.fromScene(new RoomEnvironment(), 0.04).texture;
     scene.environment = environmentTexture;
+    const cubeReflectionTarget = new THREE.WebGLCubeRenderTarget(isLowPowerDevice ? 64 : 128, {
+      generateMipmaps: true,
+      minFilter: THREE.LinearMipmapLinearFilter,
+    });
+    const playerReflectionCamera = new THREE.CubeCamera(0.25, 90, cubeReflectionTarget);
+    scene.add(playerReflectionCamera);
 
     let composer = null;
     const renderSize = new THREE.Vector2();
@@ -213,12 +413,18 @@ export default function ThreeCarGame() {
     rimLight.position.set(0, 4, -12);
     scene.add(rimLight);
 
+    const lightningLight = new THREE.PointLight(0xcfe6ff, 0, 95, 1.8);
+    lightningLight.position.set(0, 18, -42);
+    scene.add(lightningLight);
+
     const world = new THREE.Group();
     scene.add(world);
 
     const shaderUniforms = {
       time: { value: 0 },
       speed: { value: 0 },
+      roadWetness: { value: 0 },
+      snowCover: { value: 0 },
       skySunDirection: { value: new THREE.Vector3(-0.5, 0.72, 0.22).normalize() },
     };
 
@@ -234,6 +440,7 @@ export default function ThreeCarGame() {
           uHorizon: { value: new THREE.Color(0xc6ebff) },
           uHaze: { value: new THREE.Color(0xeef8ff) },
           uSunColor: { value: new THREE.Color(0xffc966) },
+          uLightning: { value: 0 },
         },
         vertexShader: `
           varying vec3 vWorldPosition;
@@ -251,6 +458,7 @@ export default function ThreeCarGame() {
           uniform vec3 uHorizon;
           uniform vec3 uHaze;
           uniform vec3 uSunColor;
+          uniform float uLightning;
           varying vec3 vWorldPosition;
 
           float hash21(vec2 p) {
@@ -264,13 +472,14 @@ export default function ThreeCarGame() {
             float height = clamp(direction.y * 0.5 + 0.5, 0.0, 1.0);
             vec3 color = mix(uHorizon, uZenith, pow(height, 0.74));
 
-            float sunDisk = pow(max(dot(direction, normalize(uSunDirection)), 0.0), 360.0);
-            float sunGlow = pow(max(dot(direction, normalize(uSunDirection)), 0.0), 8.0);
-            float horizonHaze = pow(1.0 - height, 3.2);
-            float cloudNoise = hash21(direction.xz * 55.0 + uTime * 0.01) * 0.012;
+            float sunDisk = pow(max(dot(direction, normalize(uSunDirection)), 0.0), 420.0);
+            float sunGlow = pow(max(dot(direction, normalize(uSunDirection)), 0.0), 12.0);
+            float horizonHaze = pow(1.0 - height, 4.4);
+            float cloudNoise = hash21(direction.xz * 55.0 + uTime * 0.01) * 0.006;
 
-            color = mix(color, uHaze, horizonHaze * 0.36);
-            color += uSunColor * (sunDisk * 2.8 + sunGlow * 0.34);
+            color = mix(color, uHaze, horizonHaze * 0.16);
+            color += uSunColor * (sunDisk * 1.55 + sunGlow * 0.12);
+            color += vec3(0.32, 0.44, 0.64) * uLightning * (0.32 + horizonHaze * 0.55);
             color += cloudNoise;
 
             gl_FragColor = vec4(color, 1.0);
@@ -282,32 +491,50 @@ export default function ThreeCarGame() {
       grassLight: new THREE.MeshStandardMaterial({ color: 0x72b75d, roughness: 1 }),
       field: new THREE.MeshStandardMaterial({ color: 0x8fb85b, roughness: 1 }),
       crop: new THREE.MeshStandardMaterial({ color: 0xd0b85a, roughness: 0.96 }),
-      road: new THREE.MeshStandardMaterial({ color: 0x262d35, roughness: 0.92, metalness: 0.02 }),
-      roadPatch: new THREE.MeshStandardMaterial({ color: 0x343b44, roughness: 0.95, metalness: 0.01 }),
+      road: new THREE.MeshStandardMaterial({ color: 0x232a32, roughness: 0.82, metalness: 0.04, envMapIntensity: 0.9 }),
+      roadPatch: new THREE.MeshStandardMaterial({ color: 0x303841, roughness: 0.86, metalness: 0.03, envMapIntensity: 1.05 }),
+      puddle: new THREE.MeshPhysicalMaterial({
+        color: 0x7da2b8,
+        roughness: 0.03,
+        metalness: 0.02,
+        clearcoat: 1,
+        clearcoatRoughness: 0.02,
+        transparent: true,
+        opacity: 0,
+        depthWrite: false,
+        envMapIntensity: 2.2,
+      }),
       tireMark: new THREE.MeshBasicMaterial({ color: 0x0e1116, transparent: true, opacity: 0.22, depthWrite: false }),
       shoulder: new THREE.MeshStandardMaterial({ color: 0x4e5459, roughness: 0.95 }),
       shoulderLight: new THREE.MeshStandardMaterial({ color: 0x687075, roughness: 0.96 }),
-      laneLine: new THREE.MeshBasicMaterial({ color: 0xf8f8f0 }),
-      edgeLine: new THREE.MeshBasicMaterial({ color: 0xffdf77 }),
+      laneLine: new THREE.MeshBasicMaterial({ color: 0xd7d8d1 }),
+      edgeLine: new THREE.MeshBasicMaterial({ color: 0xd5ad4e }),
       rumbleRed: new THREE.MeshStandardMaterial({ color: 0xc83f3f, roughness: 0.9 }),
-      rumbleWhite: new THREE.MeshStandardMaterial({ color: 0xf4f4ee, roughness: 0.85 }),
-      barrier: new THREE.MeshStandardMaterial({ color: 0xd4d8dc, roughness: 0.8 }),
-      barrierTop: new THREE.MeshStandardMaterial({ color: 0x9ca6ad, roughness: 0.75, metalness: 0.08 }),
-      reflector: new THREE.MeshStandardMaterial({ color: 0xffdc6a, emissive: 0xff9f1c, emissiveIntensity: 0.55, roughness: 0.25 }),
+      rumbleWhite: new THREE.MeshStandardMaterial({ color: 0xbfc2bc, roughness: 0.85 }),
+      barrier: new THREE.MeshStandardMaterial({ color: 0x9fa7aa, roughness: 0.86 }),
+      barrierTop: new THREE.MeshStandardMaterial({ color: 0x69747b, roughness: 0.74, metalness: 0.08 }),
+      reflector: new THREE.MeshStandardMaterial({ color: 0xd2a85a, emissive: 0xff8f1c, emissiveIntensity: 0.08, roughness: 0.42 }),
+      sidewalk: new THREE.MeshStandardMaterial({ color: 0xa9a49b, roughness: 0.82 }),
+      curb: new THREE.MeshStandardMaterial({ color: 0xc2beb5, roughness: 0.78 }),
+      cityWall: new THREE.MeshStandardMaterial({ color: 0xa89583, roughness: 0.86 }),
+      cityWallCool: new THREE.MeshStandardMaterial({ color: 0x7f8a95, roughness: 0.82 }),
+      cityDarkWall: new THREE.MeshStandardMaterial({ color: 0x5e6770, roughness: 0.78 }),
+      cityWindow: new THREE.MeshStandardMaterial({ color: 0x25394a, emissive: 0x142331, emissiveIntensity: 0.04, roughness: 0.2, metalness: 0.18 }),
+      planter: new THREE.MeshStandardMaterial({ color: 0x8a7b66, roughness: 0.88 }),
       signPost: new THREE.MeshStandardMaterial({ color: 0x8a949b, roughness: 0.45, metalness: 0.45 }),
       signBoard: new THREE.MeshStandardMaterial({ color: 0x1d7a5d, roughness: 0.65 }),
       signBack: new THREE.MeshStandardMaterial({ color: 0x28343f, roughness: 0.7 }),
       lampPost: new THREE.MeshStandardMaterial({ color: 0x5d6872, roughness: 0.5, metalness: 0.35 }),
-      lampHead: new THREE.MeshStandardMaterial({ color: 0xffe8a3, emissive: 0xffc857, emissiveIntensity: 0.9, roughness: 0.28 }),
+      lampHead: new THREE.MeshStandardMaterial({ color: 0xffe8a3, emissive: 0xffc857, emissiveIntensity: 0.9, roughness: 0.22 }),
       lampGlow: new THREE.MeshBasicMaterial({
-        color: 0xffd37a,
+        color: 0xe5a84f,
         transparent: true,
-        opacity: 0.12,
+        opacity: 0,
         blending: THREE.AdditiveBlending,
         depthWrite: false,
       }),
       mountain: new THREE.MeshStandardMaterial({ color: 0x74879a, roughness: 1 }),
-      mountainSnow: new THREE.MeshStandardMaterial({ color: 0xe6f5ff, roughness: 0.85 }),
+      mountainSnow: new THREE.MeshStandardMaterial({ color: 0xbfcbd0, roughness: 0.88 }),
       trunk: new THREE.MeshStandardMaterial({ color: 0x6b4226, roughness: 1 }),
       leaves: new THREE.MeshStandardMaterial({ color: 0x237a3b, roughness: 1 }),
       leavesDark: new THREE.MeshStandardMaterial({ color: 0x155f32, roughness: 1 }),
@@ -317,30 +544,67 @@ export default function ThreeCarGame() {
       buildingRoof: new THREE.MeshStandardMaterial({ color: 0x9b3d31, roughness: 0.85 }),
       window: new THREE.MeshStandardMaterial({ color: 0x8ed7ff, emissive: 0x2d75a6, emissiveIntensity: 0.14, roughness: 0.2, metalness: 0.15 }),
       chimney: new THREE.MeshStandardMaterial({ color: 0x7d5140, roughness: 0.9 }),
-      cloud: new THREE.MeshBasicMaterial({ color: 0xf5fbff, transparent: true, opacity: 0.78, depthWrite: false }),
+      cloud: new THREE.MeshBasicMaterial({ color: 0xb6c2c8, transparent: true, opacity: 0.34, depthWrite: false }),
       sunBlock: new THREE.MeshBasicMaterial({ color: 0xffd166 }),
-      playerBody: new THREE.MeshPhysicalMaterial({ color: 0xf12a45, roughness: 0.24, metalness: 0.48, clearcoat: 1, clearcoatRoughness: 0.08 }),
-      playerAccent: new THREE.MeshPhysicalMaterial({ color: 0x121823, roughness: 0.32, metalness: 0.32, clearcoat: 0.8, clearcoatRoughness: 0.12 }),
-      black: new THREE.MeshStandardMaterial({ color: 0x111827, roughness: 0.35, metalness: 0.18 }),
-      glass: new THREE.MeshPhysicalMaterial({
-        color: 0x9fdcff,
-        roughness: 0.04,
-        metalness: 0.08,
+      rainStreak: new THREE.MeshBasicMaterial({
+        color: 0xa8d8ff,
         transparent: true,
-        opacity: 0.74,
-        clearcoat: 1,
-        clearcoatRoughness: 0.04,
-        transmission: 0.18,
-        thickness: 0.22,
+        opacity: 0,
+        blending: THREE.AdditiveBlending,
+        depthWrite: false,
       }),
-      chrome: new THREE.MeshPhysicalMaterial({ color: 0xd9dde3, roughness: 0.12, metalness: 0.92, clearcoat: 0.7, clearcoatRoughness: 0.08 }),
+      snowFlake: new THREE.MeshBasicMaterial({
+        color: 0xf7fbff,
+        transparent: true,
+        opacity: 0,
+        depthWrite: false,
+      }),
+      playerBody: new THREE.MeshPhysicalMaterial({
+        color: 0x152c98,
+        roughness: 0.09,
+        metalness: 0.34,
+        clearcoat: 1,
+        clearcoatRoughness: 0.018,
+        reflectivity: 1,
+        envMapIntensity: 1.55,
+      }),
+      playerAccent: new THREE.MeshPhysicalMaterial({
+        color: 0x070b12,
+        roughness: 0.12,
+        metalness: 0.36,
+        clearcoat: 1,
+        clearcoatRoughness: 0.035,
+        reflectivity: 1,
+        envMapIntensity: 1.35,
+      }),
+      black: new THREE.MeshStandardMaterial({ color: 0x070b12, roughness: 0.38, metalness: 0.22 }),
+      glass: new THREE.MeshPhysicalMaterial({
+        color: 0x121a23,
+        roughness: 0.05,
+        metalness: 0.22,
+        transparent: true,
+        opacity: 0.72,
+        clearcoat: 1,
+        clearcoatRoughness: 0.035,
+        transmission: 0,
+        thickness: 0.22,
+        envMapIntensity: 1.7,
+      }),
+      chrome: new THREE.MeshPhysicalMaterial({ color: 0x84909a, roughness: 0.1, metalness: 0.9, clearcoat: 0.8, clearcoatRoughness: 0.05, envMapIntensity: 1.35 }),
       grille: new THREE.MeshStandardMaterial({ color: 0x0b0f15, roughness: 0.55, metalness: 0.55 }),
-      plate: new THREE.MeshBasicMaterial({ color: 0xfff6d8 }),
+      plate: new THREE.MeshBasicMaterial({ color: 0xc8b886 }),
       wheel: new THREE.MeshStandardMaterial({ color: 0x111111, roughness: 0.8 }),
-      rim: new THREE.MeshPhysicalMaterial({ color: 0xb8c0c8, roughness: 0.22, metalness: 0.92, clearcoat: 0.5, clearcoatRoughness: 0.08 }),
-      headlight: new THREE.MeshStandardMaterial({ color: 0xfff1b0, emissive: 0xffdd88, emissiveIntensity: 0.82, roughness: 0.18, metalness: 0.15 }),
-      headlightGlow: new THREE.MeshBasicMaterial({ color: 0xffe8a3, transparent: true, opacity: 0.08, blending: THREE.AdditiveBlending, depthWrite: false }),
-      taillight: new THREE.MeshStandardMaterial({ color: 0xff5050, emissive: 0xff2222, emissiveIntensity: 1.18, roughness: 0.2, metalness: 0.1 }),
+      rim: new THREE.MeshPhysicalMaterial({ color: 0xb8c0c8, roughness: 0.12, metalness: 0.94, clearcoat: 0.75, clearcoatRoughness: 0.04, envMapIntensity: 1.9 }),
+      headlight: new THREE.MeshStandardMaterial({ color: 0xd7c184, emissive: 0xffbd5d, emissiveIntensity: 0.16, roughness: 0.18, metalness: 0.18 }),
+      headlightGlow: new THREE.MeshBasicMaterial({ color: 0xffc46b, transparent: true, opacity: 0, blending: THREE.AdditiveBlending, depthWrite: false }),
+      headlightReflection: new THREE.MeshBasicMaterial({
+        color: 0xffb45b,
+        transparent: true,
+        opacity: 0,
+        blending: THREE.AdditiveBlending,
+        depthWrite: false,
+      }),
+      taillight: new THREE.MeshStandardMaterial({ color: 0xb11e2d, emissive: 0xa80d16, emissiveIntensity: 0.28, roughness: 0.24, metalness: 0.1 }),
       contactShadow: new THREE.MeshBasicMaterial({
         color: 0x000000,
         transparent: true,
@@ -348,6 +612,41 @@ export default function ThreeCarGame() {
         depthWrite: false,
       }),
     };
+
+    const snowTintColor = new THREE.Color(0xb9c5c7);
+    const coldRockColor = new THREE.Color(0x98a8b2);
+    const baseMaterialColors = new Map([
+      materials.ground,
+      materials.grassDark,
+      materials.grassLight,
+      materials.field,
+      materials.crop,
+      materials.leaves,
+      materials.leavesDark,
+      materials.bush,
+      materials.mountain,
+      materials.barrier,
+      materials.barrierTop,
+      materials.shoulder,
+      materials.shoulderLight,
+      materials.sidewalk,
+      materials.curb,
+      materials.cityWall,
+      materials.cityWallCool,
+      materials.cityDarkWall,
+      materials.planter,
+    ].map((material) => [material, material.color.clone()]));
+
+    [
+      materials.playerBody,
+      materials.playerAccent,
+      materials.glass,
+      materials.chrome,
+      materials.rim,
+    ].forEach((material) => {
+      material.envMap = cubeReflectionTarget.texture;
+      material.needsUpdate = true;
+    });
 
     const geometries = {
       sky: new THREE.SphereGeometry(145, 36, 18),
@@ -357,8 +656,11 @@ export default function ThreeCarGame() {
       cropRow: new THREE.BoxGeometry(0.12, 0.16, 2.3),
       road: new THREE.BoxGeometry(8, 0.12, 120),
       roadPatch: new THREE.BoxGeometry(1.35, 0.025, 2.2),
+      puddle: new THREE.BoxGeometry(1.25, 0.018, 2.8),
       tireMark: new THREE.BoxGeometry(0.12, 0.025, 4.5),
       shoulder: new THREE.BoxGeometry(0.4, 0.06, 120),
+      sidewalk: new THREE.BoxGeometry(3.2, 0.12, 120),
+      curb: new THREE.BoxGeometry(0.22, 0.18, 120),
       edgeLine: new THREE.BoxGeometry(0.08, 0.035, 4.8),
       rumble: new THREE.BoxGeometry(0.34, 0.04, 0.7),
       laneLine: new THREE.BoxGeometry(0.16, 0.03, 2.6),
@@ -383,8 +685,15 @@ export default function ThreeCarGame() {
       houseRoof: new THREE.ConeGeometry(1.9, 1.0, 4),
       window: new THREE.BoxGeometry(0.42, 0.38, 0.04),
       chimney: new THREE.BoxGeometry(0.32, 0.7, 0.32),
+      cityTower: new THREE.BoxGeometry(3.4, 5.4, 3.0),
+      cityShop: new THREE.BoxGeometry(3.0, 2.2, 2.4),
+      cityWindow: new THREE.BoxGeometry(0.48, 0.52, 0.05),
+      awning: new THREE.BoxGeometry(2.2, 0.18, 0.48),
+      planter: new THREE.BoxGeometry(1.0, 0.42, 1.0),
       cloudBlock: new THREE.BoxGeometry(1.4, 0.7, 0.7),
       sunBlock: new THREE.BoxGeometry(2.2, 2.2, 0.08),
+      rainStreak: new THREE.BoxGeometry(0.026, 0.9, 0.026),
+      snowFlake: new THREE.BoxGeometry(0.1, 0.1, 0.1),
       carBody: new THREE.BoxGeometry(1.35, 0.42, 2.3),
       carHood: new THREE.BoxGeometry(1.2, 0.18, 0.7),
       carRear: new THREE.BoxGeometry(1.15, 0.2, 0.55),
@@ -398,6 +707,7 @@ export default function ThreeCarGame() {
       plate: new THREE.BoxGeometry(0.36, 0.16, 0.04),
       exhaust: new THREE.BoxGeometry(0.18, 0.12, 0.26),
       headlightBeam: new THREE.BoxGeometry(0.34, 0.02, 2.6),
+      headlightReflection: new THREE.BoxGeometry(0.52, 0.015, 3.9),
       windshield: new THREE.BoxGeometry(0.86, 0.28, 0.35),
       rearGlass: new THREE.BoxGeometry(0.82, 0.22, 0.28),
       bumper: new THREE.BoxGeometry(1.18, 0.14, 0.18),
@@ -436,6 +746,8 @@ export default function ThreeCarGame() {
       material.onBeforeCompile = (shader) => {
         shader.uniforms.uSurfaceTime = shaderUniforms.time;
         shader.uniforms.uSurfaceSpeed = shaderUniforms.speed;
+        shader.uniforms.uWeatherWetness = shaderUniforms.roadWetness;
+        shader.uniforms.uSnowCover = shaderUniforms.snowCover;
 
         shader.vertexShader = shader.vertexShader
           .replace(
@@ -461,6 +773,8 @@ export default function ThreeCarGame() {
             varying vec3 vSurfaceWorldPosition;
             uniform float uSurfaceTime;
             uniform float uSurfaceSpeed;
+            uniform float uWeatherWetness;
+            uniform float uSnowCover;
 
             float hash21Surface(vec2 p) {
               p = fract(p * vec2(123.34, 456.21));
@@ -492,10 +806,15 @@ export default function ThreeCarGame() {
               ? `
                 float crackSurface = smoothstep(0.9, 0.985, valueNoiseSurface(vSurfaceWorldPosition.xz * 4.8 + 8.0));
                 float tarFleck = smoothstep(0.965, 0.995, valueNoiseSurface(vSurfaceWorldPosition.xz * 18.0 - 3.0));
+                float wetPuddle = smoothstep(0.58, 0.92, valueNoiseSurface(vSurfaceWorldPosition.xz * 2.4 + vec2(2.0, -1.7)));
+                float snowDust = smoothstep(0.52, 1.0, valueNoiseSurface(vSurfaceWorldPosition.xz * 3.1 + 11.0));
                 diffuseColor.rgb *= mix(0.9, 1.08, shaderNoise);
                 diffuseColor.rgb -= crackSurface * vec3(0.018, 0.019, 0.02);
                 diffuseColor.rgb -= tarFleck * vec3(0.028, 0.03, 0.032);
                 diffuseColor.rgb += vec3(0.008, 0.008, 0.006) * smoothstep(0.82, 1.0, fineSurface) * (0.42 + uSurfaceSpeed * 0.35);
+                diffuseColor.rgb = mix(diffuseColor.rgb, diffuseColor.rgb * vec3(0.55, 0.62, 0.72) + vec3(0.018, 0.032, 0.047), uWeatherWetness * (0.36 + wetPuddle * 0.34));
+                diffuseColor.rgb += vec3(0.12, 0.16, 0.18) * wetPuddle * uWeatherWetness * 0.4;
+                diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.7, 0.78, 0.82), uSnowCover * snowDust * 0.18);
               `
               : mode === "paint"
                 ? `
@@ -504,8 +823,10 @@ export default function ThreeCarGame() {
                   diffuseColor.rgb += vec3(0.085, 0.075, 0.065) * highlightStripe * (0.24 + uSurfaceSpeed * 0.22);
                 `
                 : `
+                  float snowDust = smoothstep(0.46, 1.0, valueNoiseSurface(vSurfaceWorldPosition.xz * 2.2 + 4.0));
                   diffuseColor.rgb *= mix(vec3(0.76, 0.92, 0.72), vec3(1.16, 1.08, 0.84), shaderNoise);
                   diffuseColor.rgb += vec3(0.012, 0.018, 0.0) * smoothstep(0.72, 1.0, fineSurface);
+                  diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.78, 0.87, 0.86), uSnowCover * (0.22 + snowDust * 0.46));
                 `}
             `
           )
@@ -513,9 +834,27 @@ export default function ThreeCarGame() {
             "#include <roughnessmap_fragment>",
             `
             #include <roughnessmap_fragment>
-            roughnessFactor = clamp(roughnessFactor + (1.0 - shaderNoise) * ${roughnessLift.toFixed(3)}, 0.0, 1.0);
+            ${mode === "road"
+              ? `
+                float wetPuddleRoughness = smoothstep(0.58, 0.92, valueNoiseSurface(vSurfaceWorldPosition.xz * 2.4 + vec2(2.0, -1.7)));
+                roughnessFactor = clamp(roughnessFactor + (1.0 - shaderNoise) * ${roughnessLift.toFixed(3)} - uWeatherWetness * (0.48 + wetPuddleRoughness * 0.34), 0.08, 1.0);
+              `
+              : `
+                roughnessFactor = clamp(roughnessFactor + (1.0 - shaderNoise) * ${roughnessLift.toFixed(3)}, 0.0, 1.0);
+              `}
             `
           );
+
+        if (mode === "road") {
+          shader.fragmentShader = shader.fragmentShader.replace(
+            "#include <metalnessmap_fragment>",
+            `
+            #include <metalnessmap_fragment>
+            float wetPuddleMetal = smoothstep(0.58, 0.92, valueNoiseSurface(vSurfaceWorldPosition.xz * 2.4 + vec2(2.0, -1.7)));
+            metalnessFactor = clamp(metalnessFactor + uWeatherWetness * wetPuddleMetal * 0.08, 0.0, 1.0);
+            `
+          );
+        }
       };
 
       material.customProgramCacheKey = () => `blockrush-${mode}-${roughnessLift}`;
@@ -555,8 +894,12 @@ export default function ThreeCarGame() {
     addMesh(geometries.road, materials.road, [0, -0.05, -40]);
     addMesh(geometries.shoulder, materials.shoulder, [-4.2, 0, -40]);
     addMesh(geometries.shoulder, materials.shoulder, [4.2, 0, -40]);
+    addMesh(geometries.sidewalk, materials.sidewalk, [-6.05, -0.02, -40]);
+    addMesh(geometries.sidewalk, materials.sidewalk, [6.05, -0.02, -40]);
+    addMesh(geometries.curb, materials.curb, [-4.72, 0.02, -40]);
+    addMesh(geometries.curb, materials.curb, [4.72, 0.02, -40]);
 
-    addMesh(geometries.sunBlock, materials.sunBlock, [-19, 12.5, -48], world, false, false);
+    const sunBlock = addMesh(geometries.sunBlock, materials.sunBlock, [-19, 12.5, -48], world, false, false);
 
     function addTrackedMesh(geometry, material, position, resetAfter = ROAD_RESET_Z, resetBy = FAR_RESET_AMOUNT, speedMul = 1.9) {
       return trackRoadItem(addMesh(geometry, material, position, world, false, false), resetAfter, resetBy, speedMul);
@@ -582,6 +925,22 @@ export default function ThreeCarGame() {
         const mark = addTrackedMesh(geometries.tireMark, materials.tireMark, [lane + 0.34, 0.045, z - 1.4], 22, 128, 1.9);
         mark.rotation.y = (Math.random() - 0.5) * 0.06;
       }
+    }
+
+    const wetSurfaceObjects = [];
+    for (let z = -104; z < 14; z += 9.5) {
+      const lane = LANES[Math.floor(Math.random() * LANES.length)];
+      const puddle = addTrackedMesh(
+        geometries.puddle,
+        materials.puddle,
+        [lane + (Math.random() - 0.5) * 0.42, 0.055, z],
+        22,
+        128,
+        1.9
+      );
+      puddle.scale.set(0.65 + Math.random() * 0.75, 1, 0.7 + Math.random() * 0.95);
+      puddle.rotation.y = (Math.random() - 0.5) * 0.08;
+      wetSurfaceObjects.push(puddle);
     }
 
     for (let z = -100; z < 25; z += 2.8) {
@@ -727,6 +1086,56 @@ export default function ThreeCarGame() {
       trackRoadItem(group, 30, 150, 1.25);
     }
 
+    function createCityBlock(side, z, index) {
+      const group = new THREE.Group();
+      const towerMaterial = index % 3 === 0
+        ? materials.cityDarkWall
+        : index % 3 === 1
+          ? materials.cityWallCool
+          : materials.cityWall;
+      const towerHeight = 0.82 + (index % 4) * 0.12;
+      const tower = addMesh(geometries.cityTower, towerMaterial, [0, 2.7 * towerHeight, 0], group, true, true);
+      tower.scale.set(0.86 + (index % 2) * 0.18, towerHeight, 0.92 + (index % 3) * 0.08);
+
+      const shop = addMesh(geometries.cityShop, materials.cityWall, [-side * 0.18, 1.05, 2.05], group, true, true);
+      shop.scale.set(1.06, 0.94, 0.82);
+
+      const facadeX = -side * (1.72 + (index % 2) * 0.22);
+      for (let row = 0; row < 3; row++) {
+        for (let col = -1; col <= 1; col++) {
+          const windowMesh = addMesh(
+            geometries.cityWindow,
+            materials.cityWindow,
+            [facadeX, 1.8 + row * 1.05, col * 0.72 - 0.2],
+            group,
+            false,
+            false
+          );
+          windowMesh.rotation.y = Math.PI * 0.5;
+        }
+      }
+
+      const awning = addMesh(geometries.awning, index % 2 === 0 ? materials.rumbleRed : materials.signBoard, [facadeX, 1.72, 1.65], group, false, false);
+      awning.rotation.y = Math.PI * 0.5;
+      awning.scale.set(0.9, 1, 1.1);
+
+      group.position.set(side * (9.2 + (index % 3) * 1.3), 0, z);
+      group.rotation.y = side < 0 ? 0.03 : -0.03;
+      world.add(group);
+      trackRoadItem(group, 34, 152, 1.18);
+    }
+
+    function createStreetTree(side, z, index) {
+      const group = new THREE.Group();
+      addMesh(geometries.planter, materials.planter, [0, 0.22, 0], group, true, true);
+      addMesh(geometries.trunk, materials.trunk, [0, 0.92, 0], group, true, false).scale.set(0.72, 0.95, 0.72);
+      const crown = addMesh(geometries.leaves, index % 2 === 0 ? materials.leavesDark : materials.leaves, [0, 1.9, 0], group, true, false);
+      crown.scale.set(0.95, 0.86, 0.95);
+      group.position.set(side * 6.75, 0, z);
+      world.add(group);
+      trackRoadItem(group, 26, 132, 1.65);
+    }
+
     for (let z = -106; z < 24; z += 8) {
       [-1, 1].forEach((side) => {
         const sideOffset = 8 + Math.random() * 7;
@@ -758,6 +1167,14 @@ export default function ThreeCarGame() {
       createHouse(1, z - 12, Math.floor(Math.random() * 5));
     }
 
+    for (let z = -112; z < 14; z += 18) {
+      const index = Math.floor((z + 112) / 18);
+      createCityBlock(-1, z - 3, index);
+      createCityBlock(1, z + 6, index + 3);
+      createStreetTree(-1, z + 5, index);
+      createStreetTree(1, z - 5, index + 1);
+    }
+
     for (let z = -100; z < 20; z += 18) {
       createLamp(-1, z);
       createLamp(1, z + 9);
@@ -780,52 +1197,59 @@ export default function ThreeCarGame() {
       return wheelGroup;
     }
 
+    const headlightReflectionMeshes = [];
+
     function createPlayerCar() {
       const car = new THREE.Group();
       addContactShadow(car, geometries.contactShadowPlayer, 0.24);
       addMesh(geometries.carBody, materials.playerBody, [0, 0.45, 0], car, true, false);
-      addMesh(geometries.carHood, materials.playerBody, [0, 0.62, 0.65], car, true, false);
-      addMesh(geometries.carRear, materials.playerBody, [0, 0.62, -0.75], car, true, false);
-      addMesh(geometries.hoodStripe, materials.playerAccent, [0, 0.74, 0.2], car, true, false);
+      addMesh(geometries.carHood, materials.playerBody, [0, 0.62, -0.65], car, true, false);
+      addMesh(geometries.carRear, materials.playerBody, [0, 0.62, 0.75], car, true, false);
+      addMesh(geometries.hoodStripe, materials.playerAccent, [0, 0.74, -0.2], car, true, false);
       addMesh(geometries.sideSkirt, materials.playerAccent, [-0.72, 0.34, 0], car, true, false);
       addMesh(geometries.sideSkirt, materials.playerAccent, [0.72, 0.34, 0], car, true, false);
       addMesh(geometries.playerCabin, materials.black, [0, 0.88, -0.05], car, true, false);
-      addMesh(geometries.roofScoop, materials.playerAccent, [0, 1.2, 0.04], car, true, false);
+      addMesh(geometries.roofScoop, materials.playerAccent, [0, 1.2, -0.18], car, true, false);
 
-      const windshield = addMesh(geometries.windshield, materials.glass, [0, 0.96, 0.22], car, false, false);
-      windshield.rotation.x = -0.35;
+      const windshield = addMesh(geometries.windshield, materials.glass, [0, 0.96, -0.24], car, false, false);
+      windshield.rotation.x = 0.35;
 
-      const rearGlass = addMesh(geometries.rearGlass, materials.glass, [0, 0.98, -0.42], car, false, false);
-      rearGlass.rotation.x = 0.25;
+      const rearGlass = addMesh(geometries.rearGlass, materials.glass, [0, 0.98, 0.44], car, false, false);
+      rearGlass.rotation.x = -0.25;
 
       addMesh(geometries.mirror, materials.black, [-0.76, 0.84, 0.28], car, true, false);
       addMesh(geometries.mirror, materials.black, [0.76, 0.84, 0.28], car, true, false);
       addMesh(geometries.bumper, materials.chrome, [0, 0.41, 1.18], car, false, false);
       addMesh(geometries.bumper, materials.chrome, [0, 0.41, -1.18], car, false, false);
-      addMesh(geometries.grille, materials.grille, [0, 0.5, 1.25], car, false, false);
+      addMesh(geometries.grille, materials.grille, [0, 0.5, -1.25], car, false, false);
       addMesh(geometries.plate, materials.plate, [0, 0.34, 1.31], car, false, false);
       addMesh(geometries.plate, materials.plate, [0, 0.34, -1.31], car, false, false);
-      addMesh(geometries.spoiler, materials.playerAccent, [0, 0.95, -1.02], car, true, false);
-      addMesh(geometries.exhaust, materials.chrome, [-0.38, 0.23, -1.33], car, false, false);
-      addMesh(geometries.exhaust, materials.chrome, [0.38, 0.23, -1.33], car, false, false);
-      addMesh(geometries.headlight, materials.headlight, [-0.36, 0.5, 1.18], car, false, false);
-      addMesh(geometries.headlight, materials.headlight, [0.36, 0.5, 1.18], car, false, false);
-      addMesh(geometries.headlightBeam, materials.headlightGlow, [-0.36, 0.17, 2.28], car, false, false);
-      addMesh(geometries.headlightBeam, materials.headlightGlow, [0.36, 0.17, 2.28], car, false, false);
+      addMesh(geometries.spoiler, materials.playerAccent, [0, 0.95, 1.02], car, true, false);
+      addMesh(geometries.exhaust, materials.chrome, [-0.38, 0.23, 1.33], car, false, false);
+      addMesh(geometries.exhaust, materials.chrome, [0.38, 0.23, 1.33], car, false, false);
+      addMesh(geometries.headlight, materials.headlight, [-0.36, 0.5, -1.18], car, false, false);
+      addMesh(geometries.headlight, materials.headlight, [0.36, 0.5, -1.18], car, false, false);
+      addMesh(geometries.headlightBeam, materials.headlightGlow, [-0.36, 0.17, -2.28], car, false, false);
+      addMesh(geometries.headlightBeam, materials.headlightGlow, [0.36, 0.17, -2.28], car, false, false);
+      [-0.36, 0.36].forEach((x) => {
+        const reflection = addMesh(geometries.headlightReflection, materials.headlightReflection, [x, 0.065, -2.65], car, false, false);
+        reflection.renderOrder = 4;
+        headlightReflectionMeshes.push(reflection);
+      });
 
       if (!isLowPowerDevice) {
         [-0.36, 0.36].forEach((x) => {
           const beam = new THREE.SpotLight(0xffe2a8, 0.9, 14, Math.PI / 8, 0.58, 1.35);
-          beam.position.set(x, 0.54, 1.16);
-          beam.target.position.set(x, 0.16, 6.8);
+          beam.position.set(x, 0.54, -1.16);
+          beam.target.position.set(x, 0.16, -6.8);
           beam.castShadow = false;
           car.add(beam);
           car.add(beam.target);
         });
       }
 
-      addMesh(geometries.taillight, materials.taillight, [-0.34, 0.5, -1.18], car, false, false);
-      addMesh(geometries.taillight, materials.taillight, [0.34, 0.5, -1.18], car, false, false);
+      addMesh(geometries.taillight, materials.taillight, [-0.34, 0.5, 1.18], car, false, false);
+      addMesh(geometries.taillight, materials.taillight, [0.34, 0.5, 1.18], car, false, false);
 
       [[-0.75, 0.24, 0.78], [0.75, 0.24, 0.78], [-0.75, 0.24, -0.78], [0.75, 0.24, -0.78]].forEach(([x, y, z]) => {
         createWheel(car, x, y, z);
@@ -841,7 +1265,15 @@ export default function ThreeCarGame() {
     scene.add(player);
 
     const obstacleMaterials = [0x2563eb, 0xf59e0b, 0x10b981, 0x8b5cf6, 0xf43f5e].map(
-      (color) => new THREE.MeshPhysicalMaterial({ color, roughness: 0.28, metalness: 0.34, clearcoat: 0.72, clearcoatRoughness: 0.1 })
+      (color) => new THREE.MeshPhysicalMaterial({
+        color,
+        roughness: 0.16,
+        metalness: 0.38,
+        clearcoat: 0.95,
+        clearcoatRoughness: 0.04,
+        reflectivity: 0.92,
+        envMapIntensity: 1.55,
+      })
     );
     obstacleMaterials.forEach((material) => addProceduralSurfaceShader(material, "paint", 0.035));
 
@@ -876,7 +1308,314 @@ export default function ThreeCarGame() {
       return car;
     }
 
-    state.obstacles = [createObstacleCar(-20), createObstacleCar(-38), createObstacleCar(-56)];
+    state.obstacles = [createObstacleCar(-38), createObstacleCar(-62), createObstacleCar(-86)];
+
+    const particleDummy = new THREE.Object3D();
+
+    function createWeatherParticlePool(type, count) {
+      const isRain = type === "rain";
+      const mesh = new THREE.InstancedMesh(
+        isRain ? geometries.rainStreak : geometries.snowFlake,
+        isRain ? materials.rainStreak : materials.snowFlake,
+        count
+      );
+      mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+      mesh.frustumCulled = false;
+      mesh.visible = false;
+      scene.add(mesh);
+
+      const particles = Array.from({ length: count }, () => ({
+        x: -12 + Math.random() * 24,
+        y: 1.2 + Math.random() * 11,
+        z: -88 + Math.random() * 100,
+        speed: 0.65 + Math.random() * 0.75,
+        phase: Math.random() * Math.PI * 2,
+        scale: 0.65 + Math.random() * 0.75,
+      }));
+
+      particles.forEach((particle, index) => {
+        particleDummy.position.set(particle.x, particle.y, particle.z);
+        particleDummy.rotation.set(isRain ? -0.18 : 0, 0, isRain ? -0.12 : 0);
+        particleDummy.scale.setScalar(particle.scale);
+        particleDummy.updateMatrix();
+        mesh.setMatrixAt(index, particleDummy.matrix);
+      });
+      mesh.instanceMatrix.needsUpdate = true;
+
+      return { mesh, particles, type };
+    }
+
+    const weatherParticles = {
+      rain: createWeatherParticlePool("rain", isLowPowerDevice ? 180 : 450),
+      snow: createWeatherParticlePool("snow", isLowPowerDevice ? 140 : 300),
+    };
+    state.weatherState.particlePoolState = {
+      rainCount: weatherParticles.rain.particles.length,
+      snowCount: weatherParticles.snow.particles.length,
+    };
+
+    function resetWeatherParticle(particle, type) {
+      particle.x = -12 + Math.random() * 24;
+      particle.y = 7 + Math.random() * 7;
+      particle.z = type === "rain" ? -86 + Math.random() * 74 : -92 + Math.random() * 88;
+      particle.speed = type === "rain" ? 0.65 + Math.random() * 0.75 : 0.35 + Math.random() * 0.55;
+      particle.phase = Math.random() * Math.PI * 2;
+      particle.scale = type === "rain" ? 0.72 + Math.random() * 0.7 : 0.65 + Math.random() * 0.9;
+    }
+
+    function updateWeatherParticles(pool, amount, frameScale, roadMove, nowSeconds) {
+      pool.mesh.visible = amount > 0.035;
+      pool.mesh.material.opacity = pool.type === "rain" ? amount * 0.34 : amount * 0.78;
+      if (!pool.mesh.visible) return;
+
+      const isRain = pool.type === "rain";
+      const roadDrag = isRain ? roadMove * 0.72 : roadMove * 0.32;
+
+      for (let i = 0; i < pool.particles.length; i++) {
+        const particle = pool.particles[i];
+        if (isRain) {
+          particle.y -= (0.42 + particle.speed * 0.3) * frameScale;
+          particle.x -= 0.018 * frameScale;
+          particle.z += roadDrag;
+        } else {
+          particle.y -= (0.035 + particle.speed * 0.028) * frameScale;
+          particle.x += Math.sin(nowSeconds * 1.2 + particle.phase) * 0.012 * frameScale;
+          particle.z += roadDrag;
+        }
+
+        if (particle.y < 0.18 || particle.z > 12 || particle.x < -14 || particle.x > 14) {
+          resetWeatherParticle(particle, pool.type);
+        }
+
+        particleDummy.position.set(particle.x, particle.y, particle.z);
+        if (isRain) {
+          particleDummy.rotation.set(-0.24, 0, -0.12);
+          particleDummy.scale.set(0.72, particle.scale * (0.82 + amount * 0.52), 0.72);
+        } else {
+          particleDummy.rotation.set(
+            nowSeconds * 0.35 + particle.phase,
+            nowSeconds * 0.22 + particle.phase,
+            nowSeconds * 0.18
+          );
+          particleDummy.scale.setScalar(particle.scale);
+        }
+        particleDummy.updateMatrix();
+        pool.mesh.setMatrixAt(i, particleDummy.matrix);
+      }
+
+      pool.mesh.instanceMatrix.needsUpdate = true;
+    }
+
+    const currentWeather = {
+      skyTop: new THREE.Color(),
+      skyHorizon: new THREE.Color(),
+      skyHaze: new THREE.Color(),
+      fogColor: new THREE.Color(),
+      sunColor: new THREE.Color(),
+      gradeTint: new THREE.Color(),
+      sunPosition: new THREE.Vector3(),
+      sunDirection: new THREE.Vector3(),
+      fogNear: WEATHER_PRESETS.clear_noon.fogNear,
+      fogFar: WEATHER_PRESETS.clear_noon.fogFar,
+      sunIntensity: WEATHER_PRESETS.clear_noon.sunIntensity,
+      ambientIntensity: WEATHER_PRESETS.clear_noon.ambientIntensity,
+      hemiIntensity: WEATHER_PRESETS.clear_noon.hemiIntensity,
+      fillIntensity: WEATHER_PRESETS.clear_noon.fillIntensity,
+      rimIntensity: WEATHER_PRESETS.clear_noon.rimIntensity,
+      bloomStrength: WEATHER_PRESETS.clear_noon.bloomStrength,
+      bloomThreshold: WEATHER_PRESETS.clear_noon.bloomThreshold,
+      exposure: WEATHER_PRESETS.clear_noon.exposure,
+      saturation: WEATHER_PRESETS.clear_noon.saturation,
+      contrast: WEATHER_PRESETS.clear_noon.contrast,
+      roadWetness: 0,
+      snowCover: 0,
+      rainAmount: 0,
+      snowAmount: 0,
+      thunderAmount: 0,
+      cloudOpacity: WEATHER_PRESETS.clear_noon.cloudOpacity,
+      lampIntensity: WEATHER_PRESETS.clear_noon.lampIntensity,
+      lampGlowOpacity: WEATHER_PRESETS.clear_noon.lampGlowOpacity,
+      headlightBoost: WEATHER_PRESETS.clear_noon.headlightBoost,
+      lightningFlash: 0,
+    };
+
+    function sampleWeather(dt) {
+      const weather = state.weatherState;
+      weather.elapsed += dt;
+
+      const cycleSeconds = WEATHER_HOLD_SECONDS + WEATHER_TRANSITION_SECONDS;
+      const cyclePosition = weather.elapsed % (cycleSeconds * WEATHER_SEQUENCE.length);
+      const presetIndex = Math.floor(cyclePosition / cycleSeconds);
+      const localTime = cyclePosition - presetIndex * cycleSeconds;
+      const fromName = WEATHER_SEQUENCE[presetIndex];
+      const toName = WEATHER_SEQUENCE[(presetIndex + 1) % WEATHER_SEQUENCE.length];
+      const transitionProgress = localTime <= WEATHER_HOLD_SECONDS
+        ? 0
+        : easeInOutCubic((localTime - WEATHER_HOLD_SECONDS) / WEATHER_TRANSITION_SECONDS);
+      const from = WEATHER_PRESETS[fromName];
+      const to = WEATHER_PRESETS[toName];
+
+      weather.fromPreset = fromName;
+      weather.toPreset = toName;
+      weather.transitionProgress = transitionProgress;
+
+      currentWeather.skyTop.copy(from.skyTop).lerp(to.skyTop, transitionProgress);
+      currentWeather.skyHorizon.copy(from.skyHorizon).lerp(to.skyHorizon, transitionProgress);
+      currentWeather.skyHaze.copy(from.skyHaze).lerp(to.skyHaze, transitionProgress);
+      currentWeather.fogColor.copy(from.fogColor).lerp(to.fogColor, transitionProgress);
+      currentWeather.sunColor.copy(from.sunColor).lerp(to.sunColor, transitionProgress);
+      currentWeather.gradeTint.copy(from.gradeTint).lerp(to.gradeTint, transitionProgress);
+      currentWeather.sunPosition.copy(from.sunPosition).lerp(to.sunPosition, transitionProgress);
+      currentWeather.sunDirection.copy(from.sunDirection).lerp(to.sunDirection, transitionProgress).normalize();
+
+      currentWeather.fogNear = lerp(from.fogNear, to.fogNear, transitionProgress);
+      currentWeather.fogFar = lerp(from.fogFar, to.fogFar, transitionProgress);
+      currentWeather.sunIntensity = lerp(from.sunIntensity, to.sunIntensity, transitionProgress);
+      currentWeather.ambientIntensity = lerp(from.ambientIntensity, to.ambientIntensity, transitionProgress);
+      currentWeather.hemiIntensity = lerp(from.hemiIntensity, to.hemiIntensity, transitionProgress);
+      currentWeather.fillIntensity = lerp(from.fillIntensity, to.fillIntensity, transitionProgress);
+      currentWeather.rimIntensity = lerp(from.rimIntensity, to.rimIntensity, transitionProgress);
+      currentWeather.bloomStrength = lerp(from.bloomStrength, to.bloomStrength, transitionProgress);
+      currentWeather.bloomThreshold = lerp(from.bloomThreshold, to.bloomThreshold, transitionProgress);
+      currentWeather.exposure = lerp(from.exposure, to.exposure, transitionProgress);
+      currentWeather.saturation = lerp(from.saturation, to.saturation, transitionProgress);
+      currentWeather.contrast = lerp(from.contrast, to.contrast, transitionProgress);
+      currentWeather.roadWetness = lerp(from.roadWetness, to.roadWetness, transitionProgress);
+      currentWeather.snowCover = lerp(from.snowCover, to.snowCover, transitionProgress);
+      currentWeather.rainAmount = lerp(from.rainAmount, to.rainAmount, transitionProgress);
+      currentWeather.snowAmount = lerp(from.snowAmount, to.snowAmount, transitionProgress);
+      currentWeather.thunderAmount = lerp(from.thunderAmount, to.thunderAmount, transitionProgress);
+      currentWeather.cloudOpacity = lerp(from.cloudOpacity, to.cloudOpacity, transitionProgress);
+      currentWeather.lampIntensity = lerp(from.lampIntensity, to.lampIntensity, transitionProgress);
+      currentWeather.lampGlowOpacity = lerp(from.lampGlowOpacity, to.lampGlowOpacity, transitionProgress);
+      currentWeather.headlightBoost = lerp(from.headlightBoost, to.headlightBoost, transitionProgress);
+
+      if (currentWeather.thunderAmount > 0.18) {
+        weather.lightningCooldown -= dt * (0.8 + currentWeather.thunderAmount * 0.6);
+        if (weather.lightningCooldown <= 0) {
+          weather.lightningFlash = 1;
+          weather.lightningCooldown = 2.6 + Math.random() * 5.4;
+          weather.lightningX = -22 + Math.random() * 44;
+        }
+      } else {
+        weather.lightningCooldown = Math.max(weather.lightningCooldown, 3.8);
+      }
+
+      weather.lightningFlash = Math.max(0, weather.lightningFlash - dt * 3.6);
+      currentWeather.lightningFlash = weather.lightningFlash * currentWeather.thunderAmount;
+      return currentWeather;
+    }
+
+    function tintMaterialToward(material, targetColor, amount) {
+      const baseColor = baseMaterialColors.get(material);
+      if (!baseColor) return;
+      material.color.copy(baseColor).lerp(targetColor, amount);
+    }
+
+    const sceneBackgroundColor = new THREE.Color();
+    const hemiSkyColor = new THREE.Color();
+    const hemiGroundColor = new THREE.Color();
+    const lightningFogColor = new THREE.Color(0x9db8d2);
+    const lightningSkyColor = new THREE.Color(0x8fb1d0);
+    const lightningSunColor = new THREE.Color(0xa9c3df);
+    const lightningRimColor = new THREE.Color(0xc8d5df);
+    const snowyGroundColor = new THREE.Color(0x8fa1aa);
+
+    function applyWeatherVisuals(weather, speedProgress) {
+      const lightning = weather.lightningFlash;
+      const lightBloomAmount = Math.max(weather.roadWetness, weather.rainAmount * 0.65, weather.thunderAmount * 0.85);
+      const accentBloomAmount = Math.max(0.22, lightBloomAmount);
+      sceneBackgroundColor.copy(weather.skyTop).lerp(weather.skyHorizon, 0.24 + lightning * 0.18);
+      scene.background.copy(sceneBackgroundColor);
+      scene.fog.color.copy(weather.fogColor).lerp(lightningFogColor, lightning * 0.22);
+      scene.fog.near = Math.max(8, weather.fogNear - lightning * 3);
+      scene.fog.far = weather.fogFar + lightning * 14;
+
+      materials.sky.uniforms.uZenith.value.copy(weather.skyTop);
+      materials.sky.uniforms.uHorizon.value.copy(weather.skyHorizon);
+      materials.sky.uniforms.uHaze.value.copy(weather.skyHaze);
+      materials.sky.uniforms.uSunColor.value.copy(weather.sunColor);
+      materials.sky.uniforms.uLightning.value = lightning;
+      shaderUniforms.skySunDirection.value.copy(weather.sunDirection);
+      shaderUniforms.roadWetness.value = weather.roadWetness;
+      shaderUniforms.snowCover.value = weather.snowCover;
+
+      renderer.toneMappingExposure = weather.exposure + lightning * 0.045;
+      ambientLight.intensity = weather.ambientIntensity + lightning * 0.045;
+      hemiLight.intensity = weather.hemiIntensity + lightning * 0.08;
+      hemiSkyColor.copy(weather.skyHorizon).lerp(lightningSkyColor, weather.snowCover * 0.22 + lightning * 0.2);
+      hemiGroundColor.set(0x344f30).lerp(snowyGroundColor, weather.snowCover * 0.42);
+      hemiLight.color.copy(hemiSkyColor);
+      hemiLight.groundColor.copy(hemiGroundColor);
+      sun.color.copy(weather.sunColor).lerp(lightningSunColor, lightning * 0.65);
+      sun.intensity = weather.sunIntensity + lightning * 2.1;
+      sun.position.copy(weather.sunPosition);
+      fillLight.intensity = weather.fillIntensity + lightning * 0.2;
+      rimLight.intensity = weather.rimIntensity + lightning * 0.8;
+      rimLight.color.copy(weather.skyHaze).lerp(lightningRimColor, 0.14 + lightning * 0.4);
+
+      lightningLight.position.set(state.weatherState.lightningX, 18, -42);
+      lightningLight.intensity = lightning * 4.8;
+      lightningLight.distance = 95;
+
+      sunBlock.position.set(weather.sunPosition.x * 1.18, weather.sunPosition.y + 1.5, weather.sunPosition.z * 1.55);
+      sunBlock.visible = weather.sunIntensity > 0.45 && weather.thunderAmount < 0.75;
+      materials.sunBlock.color.copy(weather.sunColor);
+
+      materials.cloud.opacity = weather.cloudOpacity;
+      materials.lampHead.emissiveIntensity = weather.lampIntensity;
+      materials.lampGlow.opacity = weather.lampGlowOpacity * accentBloomAmount;
+      materials.headlight.emissiveIntensity = 0.12 + weather.headlightBoost * 0.92;
+      materials.taillight.emissiveIntensity = 0.5 + weather.headlightBoost * 0.5;
+      materials.reflector.emissiveIntensity = 0.05 + weather.headlightBoost * 0.42;
+      materials.headlightGlow.opacity = lightBloomAmount * (0.012 + weather.headlightBoost * 0.052);
+      materials.headlightReflection.opacity = weather.roadWetness * (0.006 + weather.headlightBoost * 0.04);
+      materials.puddle.opacity = weather.roadWetness * (0.08 + weather.rainAmount * 0.055);
+      wetSurfaceObjects.forEach((puddle) => {
+        puddle.visible = materials.puddle.opacity > 0.025;
+      });
+
+      materials.road.roughness = lerp(0.82, 0.22, weather.roadWetness);
+      materials.roadPatch.roughness = lerp(0.86, 0.2, weather.roadWetness);
+      materials.shoulder.roughness = lerp(0.95, 0.48, weather.roadWetness);
+      materials.shoulderLight.roughness = lerp(0.96, 0.52, weather.roadWetness);
+      materials.road.envMapIntensity = 0.9 + weather.roadWetness * 0.85;
+      materials.roadPatch.envMapIntensity = 1.05 + weather.roadWetness * 1.1;
+      materials.playerBody.envMapIntensity = 1.2 + weather.roadWetness * 0.46 + weather.thunderAmount * 0.14;
+      materials.playerAccent.envMapIntensity = 1.05 + weather.roadWetness * 0.32;
+      materials.glass.envMapIntensity = 1.3 + weather.roadWetness * 0.44;
+      materials.chrome.envMapIntensity = 1.18 + weather.roadWetness * 0.42;
+      materials.rim.envMapIntensity = 1.35 + weather.roadWetness * 0.38;
+
+      tintMaterialToward(materials.ground, snowTintColor, weather.snowCover * 0.34);
+      tintMaterialToward(materials.grassDark, snowTintColor, weather.snowCover * 0.38);
+      tintMaterialToward(materials.grassLight, snowTintColor, weather.snowCover * 0.34);
+      tintMaterialToward(materials.field, snowTintColor, weather.snowCover * 0.32);
+      tintMaterialToward(materials.crop, snowTintColor, weather.snowCover * 0.24);
+      tintMaterialToward(materials.leaves, snowTintColor, weather.snowCover * 0.3);
+      tintMaterialToward(materials.leavesDark, snowTintColor, weather.snowCover * 0.34);
+      tintMaterialToward(materials.bush, snowTintColor, weather.snowCover * 0.28);
+      tintMaterialToward(materials.mountain, coldRockColor, weather.snowCover * 0.28);
+      tintMaterialToward(materials.barrier, snowTintColor, weather.snowCover * 0.08);
+      tintMaterialToward(materials.barrierTop, snowTintColor, weather.snowCover * 0.08);
+      tintMaterialToward(materials.shoulder, snowTintColor, weather.snowCover * 0.12);
+      tintMaterialToward(materials.shoulderLight, snowTintColor, weather.snowCover * 0.1);
+      tintMaterialToward(materials.sidewalk, snowTintColor, weather.snowCover * 0.12);
+      tintMaterialToward(materials.curb, snowTintColor, weather.snowCover * 0.1);
+      tintMaterialToward(materials.cityWall, snowTintColor, weather.snowCover * 0.08);
+      tintMaterialToward(materials.cityWallCool, snowTintColor, weather.snowCover * 0.08);
+      tintMaterialToward(materials.cityDarkWall, snowTintColor, weather.snowCover * 0.06);
+      tintMaterialToward(materials.planter, snowTintColor, weather.snowCover * 0.08);
+
+      if (bloomPass && cinematicPass) {
+        bloomPass.strength = weather.bloomStrength + accentBloomAmount * 0.035 + lightBloomAmount * speedProgress * 0.024 + lightning * 0.24;
+        bloomPass.radius = 0.42 + accentBloomAmount * 0.12;
+        bloomPass.threshold = Math.max(0.68, weather.bloomThreshold - accentBloomAmount * 0.035);
+        cinematicPass.uniforms.uTint.value.set(weather.gradeTint.r, weather.gradeTint.g, weather.gradeTint.b);
+        cinematicPass.uniforms.uSaturation.value = weather.saturation;
+        cinematicPass.uniforms.uContrast.value = weather.contrast;
+      }
+    }
 
     function resetGame() {
       state.started = true;
@@ -892,7 +1631,7 @@ export default function ThreeCarGame() {
       player.rotation.set(0, 0, 0);
 
       state.obstacles.forEach((obstacle, index) => {
-        obstacle.position.z = -22 - index * 18;
+        obstacle.position.z = -38 - index * 24;
         obstacle.position.x = LANES[Math.floor(Math.random() * LANES.length)];
         obstacle.userData.passed = false;
       });
@@ -947,14 +1686,16 @@ export default function ThreeCarGame() {
       const renderPass = new RenderPass(scene, camera);
       bloomPass = new UnrealBloomPass(
         new THREE.Vector2(mount.clientWidth, mount.clientHeight),
-        0.1,
-        0.38,
-        0.95
+        WEATHER_PRESETS.clear_noon.bloomStrength,
+        0.5,
+        WEATHER_PRESETS.clear_noon.bloomThreshold
       );
       cinematicPass = new ShaderPass(CINEMATIC_SHADER);
       cinematicPass.uniforms.uGrain.value = 0.026;
       cinematicPass.uniforms.uVignette.value = 1.18;
       cinematicPass.uniforms.uChromatic.value = 0.0016;
+      cinematicPass.uniforms.uSaturation.value = WEATHER_PRESETS.clear_noon.saturation;
+      cinematicPass.uniforms.uContrast.value = WEATHER_PRESETS.clear_noon.contrast;
 
       composer = new EffectComposer(renderer);
       composer.addPass(renderPass);
@@ -964,6 +1705,8 @@ export default function ThreeCarGame() {
     }
 
     applyRenderSize();
+
+    let reflectionFrame = 0;
 
     function animate() {
       state.animationId = requestAnimationFrame(animate);
@@ -994,6 +1737,8 @@ export default function ThreeCarGame() {
 
       const moving = state.started && !state.gameOver;
       const roadMove = (moving ? state.speed : 0.012) * frameScale;
+      const nowSeconds = now * 0.001;
+      const weather = sampleWeather(dt);
 
       for (let i = 0; i < state.animatedRoadItems.length; i++) {
         const item = state.animatedRoadItems[i];
@@ -1002,6 +1747,9 @@ export default function ThreeCarGame() {
           item.object.position.z -= item.resetBy;
         }
       }
+
+      updateWeatherParticles(weatherParticles.rain, weather.rainAmount, frameScale, roadMove, nowSeconds);
+      updateWeatherParticles(weatherParticles.snow, weather.snowAmount, frameScale, roadMove, nowSeconds);
 
       const wheelSpin = (moving ? state.speed * 2.8 : 0.025) * frameScale;
       for (let i = 0; i < state.wheelGroups.length; i++) {
@@ -1039,8 +1787,8 @@ export default function ThreeCarGame() {
             state.score += 25;
           }
 
-          if (obstacle.position.z > 12) {
-            obstacle.position.z = -52 - Math.random() * 24;
+          if (obstacle.position.z > 14) {
+            obstacle.position.z = -76 - Math.random() * 34;
             obstacle.position.x = LANES[Math.floor(Math.random() * LANES.length)];
             obstacle.userData.passed = false;
           }
@@ -1059,23 +1807,33 @@ export default function ThreeCarGame() {
         player.rotation.y *= 0.92;
       }
 
-      const targetFov = moving ? 60 + state.speed * 12 : 60;
+      const targetFov = moving ? 58 + state.speed * 6 : 58;
       camera.fov += (targetFov - camera.fov) * 0.08 * frameScale;
       camera.updateProjectionMatrix();
 
       const speedProgress = (state.speed - START_SPEED) / (MAX_SPEED - START_SPEED);
+      applyWeatherVisuals(weather, speedProgress);
       const narrowViewportBonus = camera.aspect < 0.8 ? CAMERA_MOBILE_Z_BONUS : 0;
       camera.position.x += (player.position.x * 0.25 - camera.position.x) * 0.05 * frameScale;
-      camera.position.y += (CAMERA_BASE_Y - speedProgress * 0.28 - camera.position.y) * 0.035 * frameScale;
-      camera.position.z += (CAMERA_BASE_Z + narrowViewportBonus - speedProgress * 0.62 - camera.position.z) * 0.035 * frameScale;
-      camera.lookAt(player.position.x * 0.2, 1.0 + speedProgress * 0.14, -5.6 - speedProgress * 0.9);
+      camera.position.y += (CAMERA_BASE_Y - speedProgress * 0.04 - camera.position.y) * 0.035 * frameScale;
+      camera.position.z += (CAMERA_BASE_Z + narrowViewportBonus - speedProgress * 0.2 - camera.position.z) * 0.035 * frameScale;
+      camera.lookAt(player.position.x * 0.2, 0.72 + speedProgress * 0.04, 1.62 - speedProgress * 0.24);
 
-      shaderUniforms.time.value = now * 0.001;
+      shaderUniforms.time.value = nowSeconds;
       shaderUniforms.speed.value = speedProgress;
+
       if (bloomPass && cinematicPass) {
-        bloomPass.strength = 0.1 + speedProgress * 0.03;
-        cinematicPass.uniforms.uTime.value = now * 0.001;
+        cinematicPass.uniforms.uTime.value = nowSeconds;
         cinematicPass.uniforms.uSpeed.value = speedProgress;
+      }
+
+      reflectionFrame += 1;
+      if (reflectionFrame % (isLowPowerDevice ? 8 : 4) === 0) {
+        playerReflectionCamera.position.copy(player.position);
+        playerReflectionCamera.position.y += 0.72;
+        player.visible = false;
+        playerReflectionCamera.update(renderer, scene);
+        player.visible = true;
       }
 
       if (composer) {
@@ -1119,6 +1877,7 @@ export default function ThreeCarGame() {
         composer.dispose();
       }
       environmentTexture.dispose();
+      cubeReflectionTarget.dispose();
       pmremGenerator.dispose();
       scene.environment = null;
 
@@ -1142,6 +1901,7 @@ export default function ThreeCarGame() {
       state.animatedRoadItems = [];
       state.wheelGroups = [];
       state.moveLane = null;
+      state.weatherState = null;
     };
   }, []);
 
@@ -1194,34 +1954,6 @@ export default function ThreeCarGame() {
         onPointerUp={handleStagePointerUp}
       >
         <div ref={mountRef} className="h-full w-full" style={{ height: "100%", width: "100%" }} />
-
-        <style>{`
-          @keyframes blockrush-fog-breathe {
-            0%, 100% {
-              opacity: 0.035;
-              transform: translate3d(-1.5%, 0, 0) scale(1);
-            }
-
-            50% {
-              opacity: 0.095;
-              transform: translate3d(1.5%, -1%, 0) scale(1.035);
-            }
-          }
-
-          .blockrush-fog-overlay {
-            animation: blockrush-fog-breathe 6.5s ease-in-out infinite;
-            background:
-              radial-gradient(circle at 50% 58%, rgba(236, 250, 255, 0.12), transparent 31%),
-              radial-gradient(circle at 20% 68%, rgba(220, 246, 255, 0.1), transparent 34%),
-              radial-gradient(circle at 82% 34%, rgba(245, 252, 255, 0.08), transparent 32%),
-              linear-gradient(to bottom, rgba(230, 248, 255, 0.06), transparent 28%, rgba(233, 255, 240, 0.05) 82%);
-            filter: blur(12px);
-            mix-blend-mode: screen;
-            will-change: opacity, transform;
-          }
-        `}</style>
-
-        <div className="pointer-events-none absolute inset-0 blockrush-fog-overlay" style={{ zIndex: 9 }} />
 
         <div className="pointer-events-none absolute left-3 right-3 top-3 z-20 flex items-start justify-between gap-3 sm:left-6 sm:right-6 sm:top-6">
           <div className="flex items-start gap-2 sm:gap-3">

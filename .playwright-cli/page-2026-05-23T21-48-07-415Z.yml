@@ -1,0 +1,18 @@
+- generic [ref=e4]:
+  - generic:
+    - generic:
+      - generic:
+        - generic: Score
+        - generic: "12"
+      - generic:
+        - generic:
+          - generic:
+            - generic: "70"
+            - generic: km/h
+    - button "RESET" [ref=e16] [cursor=pointer]
+  - generic:
+    - generic: A
+    - generic: D
+    - generic: ←
+    - generic: →
+    - generic: SPACE
