@@ -352,6 +352,7 @@ export default function ThreeCarGame() {
     renderer.toneMappingExposure = 0.98;
     // ── PERF: shadows disabled — saves a full shadow-map draw call per frame ──
     renderer.shadowMap.enabled = false;
+    renderer.domElement.style.display = "block";
     renderer.domElement.style.touchAction = "none";
     mount.appendChild(renderer.domElement);
 
@@ -373,7 +374,7 @@ export default function ThreeCarGame() {
       const pixelRatio = Math.min(window.devicePixelRatio || 1, maxPixelRatio * renderQuality);
       renderSize.set(mount.clientWidth, mount.clientHeight);
       renderer.setPixelRatio(pixelRatio);
-      renderer.setSize(renderSize.x, renderSize.y, false);
+      renderer.setSize(renderSize.x, renderSize.y, true);
       if (composer) {
         composer.setPixelRatio(pixelRatio);
         composer.setSize(renderSize.x, renderSize.y);
