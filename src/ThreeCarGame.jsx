@@ -7,7 +7,9 @@ import { RenderPass } from "three/addons/postprocessing/RenderPass.js";
 import { ShaderPass } from "three/addons/postprocessing/ShaderPass.js";
 import { UnrealBloomPass } from "three/addons/postprocessing/UnrealBloomPass.js";
 
-const LANES = [-2.55, 0, 2.55];
+const LANE_LINE_X = 1.35;
+const LANE_WIDTH = LANE_LINE_X * 2;
+const LANES = [-LANE_WIDTH, 0, LANE_WIDTH];
 const PLAYER_Z = 3.2;
 const ROAD_RESET_Z = 18;
 const FAR_RESET_AMOUNT = 116;
@@ -867,7 +869,7 @@ export default function ThreeCarGame() {
     }
 
     for (let z = -95; z < 20; z += 6) {
-      [-1.35, 1.35].forEach((x) => addTrackedMesh(geometries.laneLine, materials.laneLine, [x, 0.035, z]));
+      [-LANE_LINE_X, LANE_LINE_X].forEach((x) => addTrackedMesh(geometries.laneLine, materials.laneLine, [x, 0.035, z]));
     }
     for (let z = -98; z < 22; z += 4.8) {
       [-3.82, 3.82].forEach((x) => addTrackedMesh(geometries.edgeLine, materials.edgeLine, [x, 0.04, z], 22, 124, 1.9));
@@ -1614,7 +1616,11 @@ export default function ThreeCarGame() {
           state.lastUiSpeed = nextUiSpeed;
           setSpeedKmh(nextUiSpeed);
         }
-        player.position.x += (state.targetX - player.position.x) * Math.min(1, 0.16 * frameScale);
+        const laneDelta = state.targetX - player.position.x;
+        player.position.x += laneDelta * Math.min(1, 0.16 * frameScale);
+        if (Math.abs(laneDelta) < 0.002) {
+          player.position.x = state.targetX;
+        }
         player.position.y = Math.sin(now * 0.013) * 0.015;
         const steer = state.targetX - player.position.x;
         player.rotation.z = steer * -0.06;
@@ -1653,7 +1659,11 @@ export default function ThreeCarGame() {
       applyWeatherVisuals(weather, speedProgress);
       const narrowViewportBonus = camera.aspect < 0.8 ? CAMERA_MOBILE_Z_BONUS : 0;
       const cameraTargetX = player.position.x;
-      camera.position.x += (cameraTargetX - camera.position.x) * 0.08 * frameScale;
+      const cameraDeltaX = cameraTargetX - camera.position.x;
+      camera.position.x += cameraDeltaX * 0.08 * frameScale;
+      if (Math.abs(cameraDeltaX) < 0.002) {
+        camera.position.x = cameraTargetX;
+      }
       camera.position.y += (CAMERA_BASE_Y - speedProgress * 0.04 - camera.position.y) * 0.035 * frameScale;
       camera.position.z += (CAMERA_BASE_Z + narrowViewportBonus - speedProgress * 0.2 - camera.position.z) * 0.035 * frameScale;
       camera.lookAt(cameraTargetX, 0.72 + speedProgress * 0.04, 1.62 - speedProgress * 0.24);
