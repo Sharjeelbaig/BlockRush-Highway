@@ -17,7 +17,8 @@ const SPEED_KMH_MIN = 68;
 const SPEED_KMH_MAX = 224;
 // ── PERF: raised budget tolerance so quality doesn't drop aggressively ──
 const TARGET_FRAME_MS = 22;
-const CAMERA_BASE_Y = 3.85;
+// const CAMERA_BASE_Y = 3.85;
+const CAMERA_BASE_Y = 2.0;
 const CAMERA_BASE_Z = 12.95;
 const CAMERA_MOBILE_Z_BONUS = 3.15;
 const WEATHER_HOLD_SECONDS = 35;
