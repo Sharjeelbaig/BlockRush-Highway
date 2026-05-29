@@ -908,6 +908,7 @@ export default function ThreeCarGame() {
     targetX: 0,
     obstacles: [],
     coins: [],
+    coinBursts: [],
     animatedRoadItems: [],
     wheelGroups: [],
     weatherState: null,
@@ -1424,6 +1425,20 @@ export default function ThreeCarGame() {
         blending: THREE.AdditiveBlending,
         depthWrite: false,
       }),
+      coinSpark: new THREE.MeshBasicMaterial({
+        color: 0xfff0a6,
+        transparent: true,
+        opacity: 0,
+        blending: THREE.AdditiveBlending,
+        depthWrite: false,
+      }),
+      coinPulse: new THREE.MeshBasicMaterial({
+        color: 0xffc83d,
+        transparent: true,
+        opacity: 0,
+        blending: THREE.AdditiveBlending,
+        depthWrite: false,
+      }),
     };
 
     const snowTintColor = new THREE.Color(0xb9c5c7);
@@ -1513,6 +1528,8 @@ export default function ThreeCarGame() {
       coinRim: new THREE.TorusGeometry(0.31, 0.035, 8, 36),
       coinFace: new THREE.CircleGeometry(0.28, 36),
       coinGlow: new THREE.CircleGeometry(0.58, 36),
+      coinSpark: new THREE.OctahedronGeometry(0.08, 0),
+      coinPulse: new THREE.TorusGeometry(0.48, 0.025, 8, 32),
       carBody: new THREE.BoxGeometry(1.35, 0.42, 2.3),
       carHood: new THREE.BoxGeometry(1.2, 0.18, 0.7),
       carRear: new THREE.BoxGeometry(1.15, 0.2, 0.55),
@@ -2076,6 +2093,44 @@ export default function ThreeCarGame() {
 
     state.coins = Array.from({ length: COIN_POOL_SIZE }, (_, index) => createCoin(index));
 
+    function createCoinBurst() {
+      const group = new THREE.Group();
+      group.visible = false;
+      const ring = new THREE.Mesh(geometries.coinPulse, materials.coinPulse.clone());
+      ring.rotation.x = Math.PI / 2;
+      group.add(ring);
+      const sparks = Array.from({ length: 10 }, (_, sparkIndex) => {
+        const spark = new THREE.Mesh(geometries.coinSpark, materials.coinSpark.clone());
+        const angle = (sparkIndex / 10) * Math.PI * 2;
+        spark.userData.velocity = new THREE.Vector3(Math.cos(angle) * 1.35, 0.9 + Math.random() * 0.55, Math.sin(angle) * 1.35);
+        spark.userData.spin = 0.08 + Math.random() * 0.08;
+        group.add(spark);
+        return spark;
+      });
+      scene.add(group);
+      return { group, ring, sparks, active: false, age: 0 };
+    }
+
+    state.coinBursts = Array.from({ length: 5 }, () => createCoinBurst());
+
+    function triggerCoinBurst(position) {
+      const burst = state.coinBursts.find((candidate) => !candidate.active) || state.coinBursts[0];
+      burst.active = true;
+      burst.age = 0;
+      burst.group.visible = true;
+      burst.group.position.copy(position);
+      burst.group.position.y += 0.12;
+      burst.group.scale.setScalar(0.25);
+      burst.ring.material.opacity = 0.78;
+      burst.ring.scale.setScalar(0.2);
+      burst.sparks.forEach((spark) => {
+        spark.position.set(0, 0, 0);
+        spark.scale.setScalar(1);
+        spark.material.opacity = 0.95;
+        spark.rotation.set(Math.random() * Math.PI, Math.random() * Math.PI, Math.random() * Math.PI);
+      });
+    }
+
     const particleDummy = new THREE.Object3D();
 
     function createWeatherParticlePool(type, count) {
@@ -2507,6 +2562,31 @@ export default function ThreeCarGame() {
         }
       }
 
+      for (let i = 0; i < state.coinBursts.length; i++) {
+        const burst = state.coinBursts[i];
+        if (!burst.active) continue;
+        burst.age += dt;
+        const progress = clamp(burst.age / 0.48, 0, 1);
+        const fade = 1 - progress;
+        burst.group.position.z += roadMove * 0.42;
+        burst.group.scale.setScalar(0.65 + progress * 1.8);
+        burst.ring.scale.setScalar(0.35 + progress * 1.65);
+        burst.ring.material.opacity = fade * 0.76;
+        burst.sparks.forEach((spark) => {
+          spark.position.x = spark.userData.velocity.x * progress;
+          spark.position.y = spark.userData.velocity.y * progress - progress * progress * 0.45;
+          spark.position.z = spark.userData.velocity.z * progress;
+          spark.rotation.x += spark.userData.spin * frameScale;
+          spark.rotation.y += spark.userData.spin * 0.8 * frameScale;
+          spark.material.opacity = fade * 0.95;
+          spark.scale.setScalar(0.9 + progress * 0.45);
+        });
+        if (progress >= 1) {
+          burst.active = false;
+          burst.group.visible = false;
+        }
+      }
+
       if (moving) {
         state.score += 0.2 * frameScale * driveMode.scoreMultiplier;
         state.speed = Math.min(driveMode.maxSpeed, driveMode.startSpeed + state.score / driveMode.speedRamp);
@@ -2566,6 +2646,7 @@ export default function ThreeCarGame() {
             ) {
               coin.collected = true;
               const reward = getCoinReward(driveMode);
+              triggerCoinBurst(coin.object.position);
               awardCoinsRef.current?.(reward);
               resetCoin(coin, i + COIN_POOL_SIZE);
             }
@@ -2675,6 +2756,7 @@ export default function ThreeCarGame() {
       obstacleMaterials.forEach((material) => material.dispose());
       state.obstacles = [];
       state.coins = [];
+      state.coinBursts = [];
       state.animatedRoadItems = [];
       state.wheelGroups = [];
       state.moveLane = null;
