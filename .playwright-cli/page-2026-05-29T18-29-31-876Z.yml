@@ -1,0 +1,30 @@
+- generic [ref=e4]:
+  - generic:
+    - generic:
+      - generic:
+        - generic: Score
+        - generic: "12"
+      - generic:
+        - generic: Best
+        - generic: "0"
+      - generic:
+        - generic:
+          - generic: B
+          - text: Coins
+        - generic: "0"
+      - generic:
+        - generic:
+          - generic:
+            - generic: "70"
+            - generic: km/h
+    - button "RESET" [ref=e190] [cursor=pointer]:
+      - img [ref=e191]
+      - text: RESET
+  - generic:
+    - generic: A
+    - generic: D
+    - generic:
+      - img
+    - generic:
+      - img
+    - generic: SPACE

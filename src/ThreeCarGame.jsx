@@ -1,18 +1,27 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import {
+  Check,
   ChevronLeft,
   ChevronRight,
   Cloud,
   CloudOff,
+  Coins,
   Gamepad2,
   Gauge,
+  Loader2,
   LogOut,
   Play,
   RotateCcw,
+  Search,
+  Send,
   Settings,
+  ShoppingBag,
   Sparkles,
   Trophy,
   User,
+  UserPlus,
+  Users,
+  X,
   Zap,
 } from "lucide-react";
 import * as THREE from "three";
@@ -23,12 +32,16 @@ import { RenderPass } from "three/addons/postprocessing/RenderPass.js";
 import { ShaderPass } from "three/addons/postprocessing/ShaderPass.js";
 import { UnrealBloomPass } from "three/addons/postprocessing/UnrealBloomPass.js";
 import {
-  getUserProgress,
+  getFriendRequestState,
   listenForAuth,
+  listenForIncomingFriendRequests,
+  respondToFriendRequest,
   saveUserRun,
+  searchPlayers,
+  sendFriendRequest,
   signInWithGoogle,
   signOutUser,
-  syncLocalHighScore,
+  syncLocalProgress,
 } from "./firebase.js";
 
 const LANE_LINE_X = 1.35;
@@ -63,6 +76,9 @@ const LOCAL_HIGH_SCORE_KEY = "blockrush.highScore";
 const LOCAL_LAST_SCORE_KEY = "blockrush.lastScore";
 const LOCAL_RUNS_KEY = "blockrush.runs";
 const LOCAL_SETTINGS_KEY = "blockrush.settings";
+const LOCAL_COINS_KEY = "blockrush.coins";
+const LOCAL_TOTAL_COINS_KEY = "blockrush.totalCoins";
+const LOCAL_LAST_RUN_COINS_KEY = "blockrush.lastRunCoins";
 const DEFAULT_SETTINGS = {
   driveMode: "rush",
   visualEffects: true,
@@ -75,30 +91,40 @@ const DRIVE_MODES = {
     startSpeed: 0.16,
     maxSpeed: 0.44,
     scoreMultiplier: 0.85,
+    coinMultiplier: 1,
     speedRamp: 3200,
     obstacleGap: 30,
     resetDepth: 92,
+    summary: "Safer pace with wider traffic spacing.",
+    detail: "Cruise eases you into a run with a slower launch, a calmer top speed, wider obstacle spacing, and reduced score pressure.",
   },
   rush: {
     label: "Rush",
     startSpeed: START_SPEED,
     maxSpeed: MAX_SPEED,
     scoreMultiplier: 1,
+    coinMultiplier: 1,
     speedRamp: 2400,
     obstacleGap: 24,
     resetDepth: 76,
+    summary: "Balanced default speed and rewards.",
+    detail: "Rush is the standard BlockRush rhythm: balanced launch speed, traffic spacing, score growth, and normal coin rewards.",
   },
   overdrive: {
     label: "Overdrive",
     startSpeed: 0.22,
     maxSpeed: 0.58,
     scoreMultiplier: 1.28,
+    coinMultiplier: 2,
     speedRamp: 1850,
     obstacleGap: 21,
     resetDepth: 68,
+    summary: "Fastest traffic with double coins.",
+    detail: "Overdrive starts faster, ramps harder, tightens traffic, and pays double coins for players who can survive the pressure.",
   },
 };
 const DRIVE_MODE_KEYS = ["cruise", "rush", "overdrive"];
+const COIN_POOL_SIZE = 8;
 const WEATHER_PRESETS = {
   clear_noon: {
     skyTop: new THREE.Color(0x3b9fe0),
@@ -393,6 +419,25 @@ function readLocalHighScore() {
 function writeLocalHighScore(score) {
   writeLocalNumber(LOCAL_HIGH_SCORE_KEY, score);
 }
+function readLocalProgress() {
+  const coinBalance = readLocalNumber(LOCAL_COINS_KEY);
+  return {
+    highScore: readLocalNumber(LOCAL_HIGH_SCORE_KEY),
+    lastScore: readLocalNumber(LOCAL_LAST_SCORE_KEY),
+    gamesPlayed: readLocalNumber(LOCAL_RUNS_KEY),
+    coins: coinBalance,
+    totalCoins: Math.max(readLocalNumber(LOCAL_TOTAL_COINS_KEY), coinBalance),
+    lastRunCoins: readLocalNumber(LOCAL_LAST_RUN_COINS_KEY),
+  };
+}
+function writeLocalProgress(progress) {
+  writeLocalNumber(LOCAL_HIGH_SCORE_KEY, progress.highScore || 0);
+  writeLocalNumber(LOCAL_LAST_SCORE_KEY, progress.lastScore || 0);
+  writeLocalNumber(LOCAL_RUNS_KEY, progress.gamesPlayed || 0);
+  writeLocalNumber(LOCAL_COINS_KEY, progress.coins || 0);
+  writeLocalNumber(LOCAL_TOTAL_COINS_KEY, progress.totalCoins || progress.coins || 0);
+  writeLocalNumber(LOCAL_LAST_RUN_COINS_KEY, progress.lastRunCoins || 0);
+}
 function readGameSettings() {
   if (typeof window === "undefined") return DEFAULT_SETTINGS;
 
@@ -413,6 +458,73 @@ function writeGameSettings(settings) {
 function getDriveMode(settings) {
   return DRIVE_MODES[settings.driveMode] || DRIVE_MODES.rush;
 }
+function getCoinReward(driveMode) {
+  return Math.max(1, Math.floor(driveMode.coinMultiplier || 1));
+}
+function createCoinTexture() {
+  const canvas = document.createElement("canvas");
+  canvas.width = 128;
+  canvas.height = 128;
+  const context = canvas.getContext("2d");
+  const gradient = context.createRadialGradient(44, 34, 12, 64, 64, 62);
+  gradient.addColorStop(0, "#fff6b7");
+  gradient.addColorStop(0.42, "#ffd447");
+  gradient.addColorStop(1, "#b66d08");
+  context.fillStyle = gradient;
+  context.beginPath();
+  context.arc(64, 64, 58, 0, Math.PI * 2);
+  context.fill();
+  context.strokeStyle = "#fff2a0";
+  context.lineWidth = 7;
+  context.stroke();
+  context.strokeStyle = "#7a4300";
+  context.lineWidth = 5;
+  context.beginPath();
+  context.arc(64, 64, 42, 0, Math.PI * 2);
+  context.stroke();
+  context.fillStyle = "#3c2500";
+  context.font = "900 58px Arial, sans-serif";
+  context.textAlign = "center";
+  context.textBaseline = "middle";
+  context.fillText("B", 64, 68);
+  context.fillStyle = "rgba(255,255,255,0.5)";
+  context.beginPath();
+  context.arc(44, 36, 10, 0, Math.PI * 2);
+  context.fill();
+
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.colorSpace = THREE.SRGBColorSpace;
+  texture.needsUpdate = true;
+  return texture;
+}
+function createCoinObject(geometries, materials) {
+  const coin = new THREE.Group();
+  const body = new THREE.Mesh(geometries.coinBody, materials.coin);
+  body.rotation.x = Math.PI / 2;
+  coin.add(body);
+
+  const frontRim = new THREE.Mesh(geometries.coinRim, materials.coinRim);
+  frontRim.position.z = 0.06;
+  coin.add(frontRim);
+  const backRim = new THREE.Mesh(geometries.coinRim, materials.coinRim);
+  backRim.position.z = -0.06;
+  coin.add(backRim);
+
+  const frontFace = new THREE.Mesh(geometries.coinFace, materials.coinFace);
+  frontFace.position.z = 0.066;
+  coin.add(frontFace);
+  const backFace = new THREE.Mesh(geometries.coinFace, materials.coinFace);
+  backFace.rotation.y = Math.PI;
+  backFace.position.z = -0.066;
+  coin.add(backFace);
+
+  const glow = new THREE.Mesh(geometries.coinGlow, materials.coinGlow);
+  glow.position.z = 0.08;
+  coin.add(glow);
+  coin.userData.glow = glow;
+
+  return coin;
+}
 function GoogleIcon({ className = "h-4 w-4" }) {
   return (
     <svg viewBox="0 0 24 24" className={className} aria-hidden="true">
@@ -423,12 +535,369 @@ function GoogleIcon({ className = "h-4 w-4" }) {
     </svg>
   );
 }
+function CoinIcon({ className = "h-4 w-4" }) {
+  return (
+    <span
+      className={`inline-grid place-items-center rounded-full border border-amber-100/70 bg-gradient-to-br from-amber-200 via-yellow-400 to-amber-700 text-[0.65em] font-black text-amber-950 shadow-[0_0_12px_rgba(251,191,36,0.35)] ${className}`}
+      aria-hidden="true"
+    >
+      B
+    </span>
+  );
+}
+
+function ModeInfoButton({ modeKey, onOpen }) {
+  const mode = DRIVE_MODES[modeKey];
+  return (
+    <span className="group relative inline-flex">
+      <button
+        type="button"
+        aria-label={`${mode.label} mode details`}
+        onClick={(event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          onOpen(modeKey);
+        }}
+        className="grid h-6 w-6 place-items-center rounded-full border border-white/20 bg-slate-950/54 text-xs font-black text-cyan-100 transition hover:border-cyan-200 hover:bg-cyan-200 hover:text-slate-950 focus-visible:outline focus-visible:outline-2 focus-visible:outline-cyan-200"
+      >
+        !
+      </button>
+      <span className="pointer-events-none absolute bottom-full left-1/2 z-50 mb-2 w-44 -translate-x-1/2 rounded-md border border-white/14 bg-slate-950/95 px-3 py-2 text-center text-[10px] font-bold normal-case leading-snug text-white opacity-0 shadow-xl transition group-hover:opacity-100 group-focus-within:opacity-100">
+        {mode.summary}
+      </span>
+    </span>
+  );
+}
+
+function GameDialog({ dialog, onClose, coins }) {
+  useEffect(() => {
+    if (!dialog) return undefined;
+    const onKeyDown = (event) => {
+      if (event.key === "Escape") onClose();
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [dialog, onClose]);
+
+  if (!dialog) return null;
+
+  const mode = dialog.modeKey ? DRIVE_MODES[dialog.modeKey] : null;
+  const title =
+    dialog.title ||
+    (dialog.type === "mode-info" && mode ? `${mode.label} Mode` : "") ||
+    (dialog.type === "shop-coming-soon" ? "Shop Coming Soon" : "") ||
+    (dialog.type === "friend-request-sent" ? "Friend Request Sent" : "") ||
+    "Notice";
+
+  return (
+    <div className="absolute inset-0 z-50 flex items-center justify-center bg-slate-950/62 p-4 backdrop-blur-[3px]" onMouseDown={onClose}>
+      <section
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="game-dialog-title"
+        className="max-h-[calc(100dvh-2rem)] w-full max-w-lg overflow-y-auto rounded-lg border border-white/16 bg-[#0b1220]/96 p-5 text-white shadow-2xl shadow-black/55"
+        onMouseDown={(event) => event.stopPropagation()}
+      >
+        <div className="flex items-start justify-between gap-4">
+          <h2 id="game-dialog-title" className="text-2xl font-black uppercase leading-tight">
+            {title}
+          </h2>
+          <button
+            type="button"
+            onClick={onClose}
+            aria-label="Close dialog"
+            className="grid h-9 w-9 shrink-0 place-items-center rounded-lg border border-white/14 bg-white/8 text-white transition hover:bg-white/16"
+          >
+            <X className="h-5 w-5" aria-hidden="true" />
+          </button>
+        </div>
+
+        {dialog.type === "mode-info" && mode && (
+          <div className="mt-5 grid gap-4">
+            <p className="text-sm font-semibold leading-relaxed text-slate-200">{mode.detail}</p>
+            <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
+              <div className="rounded-lg border border-white/12 bg-white/8 p-3">
+                <div className="text-[10px] font-black uppercase text-cyan-200">Start</div>
+                <div className="mt-1 text-xl font-black tabular-nums">{speedToKmh(mode.startSpeed)} km/h</div>
+              </div>
+              <div className="rounded-lg border border-white/12 bg-white/8 p-3">
+                <div className="text-[10px] font-black uppercase text-cyan-200">Max</div>
+                <div className="mt-1 text-xl font-black tabular-nums">{speedToKmh(mode.maxSpeed)} km/h</div>
+              </div>
+              <div className="rounded-lg border border-white/12 bg-white/8 p-3">
+                <div className="text-[10px] font-black uppercase text-amber-200">Score</div>
+                <div className="mt-1 text-xl font-black tabular-nums">{mode.scoreMultiplier}x</div>
+              </div>
+              <div className="rounded-lg border border-white/12 bg-white/8 p-3">
+                <div className="text-[10px] font-black uppercase text-amber-200">Coins</div>
+                <div className="mt-1 flex items-center gap-2 text-xl font-black tabular-nums">
+                  <CoinIcon className="h-5 w-5" />
+                  {mode.coinMultiplier}x
+                </div>
+              </div>
+              <div className="rounded-lg border border-white/12 bg-white/8 p-3">
+                <div className="text-[10px] font-black uppercase text-red-200">Traffic Gap</div>
+                <div className="mt-1 text-xl font-black tabular-nums">{mode.obstacleGap}</div>
+              </div>
+              <div className="rounded-lg border border-white/12 bg-white/8 p-3">
+                <div className="text-[10px] font-black uppercase text-red-200">Ramp</div>
+                <div className="mt-1 text-xl font-black tabular-nums">{mode.speedRamp}</div>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {dialog.type === "shop-coming-soon" && (
+          <div className="mt-5 rounded-lg border border-amber-200/20 bg-amber-200/10 p-4">
+            <div className="flex items-center gap-3">
+              <CoinIcon className="h-10 w-10 text-base" />
+              <div>
+                <div className="text-sm font-black uppercase text-amber-100">Balance</div>
+                <div className="text-3xl font-black tabular-nums">{coins}</div>
+              </div>
+            </div>
+            <p className="mt-4 text-sm font-semibold leading-relaxed text-amber-50/90">
+              The shop is in development. Your collected coins are already saved and will be used for future cars, trails, and visual upgrades.
+            </p>
+          </div>
+        )}
+
+        {dialog.type === "friend-request-sent" && (
+          <p className="mt-5 text-sm font-semibold leading-relaxed text-slate-200">
+            Request sent to <span className="font-black text-cyan-100">{dialog.profile?.displayName || "this player"}</span>.
+          </p>
+        )}
+
+        {dialog.type === "error" && (
+          <p className="mt-5 rounded-lg border border-red-300/20 bg-red-500/10 p-3 text-sm font-bold leading-relaxed text-red-100">
+            {dialog.message || "Something went wrong."}
+          </p>
+        )}
+      </section>
+    </div>
+  );
+}
+
+function ShopButton({ coins, onOpen }) {
+  return (
+    <button
+      type="button"
+      onClick={onOpen}
+      className="flex w-full items-center justify-between gap-3 rounded-lg border border-amber-200/18 bg-amber-200/10 px-4 py-3 text-left transition hover:bg-amber-200/16"
+    >
+      <span className="flex items-center gap-3">
+        <span className="grid h-10 w-10 place-items-center rounded-lg border border-amber-200/22 bg-slate-950/48 text-amber-100">
+          <ShoppingBag className="h-5 w-5" aria-hidden="true" />
+        </span>
+        <span>
+          <span className="block text-sm font-black uppercase text-white">Shop</span>
+          <span className="block text-[10px] font-black uppercase text-amber-200">Coming soon</span>
+        </span>
+      </span>
+      <span className="flex items-center gap-1 text-sm font-black tabular-nums text-amber-100">
+        <CoinIcon className="h-5 w-5" />
+        {coins}
+      </span>
+    </button>
+  );
+}
+
+function FriendsPanel({ currentUser, authBusy, onSignIn, onDialog }) {
+  const [searchTerm, setSearchTerm] = useState("");
+  const [results, setResults] = useState([]);
+  const [incomingRequests, setIncomingRequests] = useState([]);
+  const [loading, setLoading] = useState(false);
+  const [friendError, setFriendError] = useState("");
+
+  useEffect(() => {
+    if (!currentUser) {
+      setIncomingRequests([]);
+      return undefined;
+    }
+
+    return listenForIncomingFriendRequests(currentUser.uid, setIncomingRequests);
+  }, [currentUser]);
+
+  useEffect(() => {
+    if (!currentUser || searchTerm.trim().length < 2) {
+      setResults([]);
+      setLoading(false);
+      return undefined;
+    }
+
+    let cancelled = false;
+    setLoading(true);
+    const timer = window.setTimeout(async () => {
+      try {
+        const players = await searchPlayers(searchTerm, currentUser.uid);
+        const playersWithState = await Promise.all(
+          players.map(async (player) => ({
+            ...player,
+            friendState: await getFriendRequestState(currentUser.uid, player.uid),
+          }))
+        );
+        if (!cancelled) {
+          setResults(playersWithState);
+          setFriendError("");
+        }
+      } catch (error) {
+        if (!cancelled) {
+          setFriendError(error.message || "Could not search players.");
+          setResults([]);
+        }
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    }, 300);
+
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+  }, [currentUser, searchTerm]);
+
+  const sendRequest = async (profile) => {
+    try {
+      await sendFriendRequest(currentUser, profile);
+      setResults((previousResults) =>
+        previousResults.map((result) =>
+          result.uid === profile.uid
+            ? { ...result, friendState: { status: "pending", direction: "outgoing" } }
+            : result
+        )
+      );
+      setFriendError("");
+      onDialog({ type: "friend-request-sent", profile });
+    } catch (error) {
+      const message = error.message || "Could not send friend request.";
+      setFriendError(message);
+      onDialog({ type: "error", title: "Friend Request", message });
+    }
+  };
+
+  const respond = async (requestId, response) => {
+    try {
+      await respondToFriendRequest(requestId, response);
+      setIncomingRequests((previousRequests) => previousRequests.filter((request) => request.id !== requestId));
+      setFriendError("");
+    } catch (error) {
+      const message = error.message || "Could not update friend request.";
+      setFriendError(message);
+      onDialog({ type: "error", title: "Friend Request", message });
+    }
+  };
+
+  const stateLabel = (friendState) => {
+    if (friendState?.status === "friends") return "Friends";
+    if (friendState?.status === "pending" && friendState.direction === "incoming") return "Requested you";
+    if (friendState?.status === "pending") return "Pending";
+    if (friendState?.status === "accepted") return "Friends";
+    return "Add";
+  };
+
+  return (
+    <section className="rounded-lg border border-white/12 bg-white/8 p-4">
+      <div className="mb-3 flex items-center gap-2 text-sm font-black uppercase text-white">
+        <Users className="h-4 w-4 text-cyan-200" aria-hidden="true" />
+        Friends
+      </div>
+
+      {!currentUser ? (
+        <div className="rounded-lg border border-white/12 bg-slate-950/40 p-3">
+          <p className="text-xs font-bold leading-relaxed text-slate-200">Sign in with Google to search players and send friend requests.</p>
+          <button
+            type="button"
+            onClick={onSignIn}
+            disabled={authBusy}
+            aria-label="Sign in with Google"
+            className="mt-3 inline-flex w-full items-center justify-center gap-2 rounded-lg bg-white px-3 py-2 text-xs font-black uppercase text-slate-950 transition hover:bg-cyan-100 disabled:opacity-60"
+          >
+            <GoogleIcon />
+            Google
+          </button>
+        </div>
+      ) : (
+        <div className="grid gap-3">
+          <label className="relative block">
+            <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-300" aria-hidden="true" />
+            <input
+              value={searchTerm}
+              onChange={(event) => setSearchTerm(event.target.value)}
+              placeholder="Search players or @tag"
+              className="h-11 w-full rounded-lg border border-white/14 bg-slate-950/50 pl-9 pr-3 text-sm font-bold text-white outline-none transition placeholder:text-slate-400 focus:border-cyan-200"
+            />
+          </label>
+
+          {friendError && <div className="rounded-md border border-red-300/20 bg-red-500/10 px-3 py-2 text-xs font-bold text-red-100">{friendError}</div>}
+
+          {incomingRequests.length > 0 && (
+            <div className="grid gap-2">
+              <div className="text-[10px] font-black uppercase text-cyan-200">Incoming</div>
+              {incomingRequests.map((request) => (
+                <div key={request.id} className="rounded-lg border border-white/12 bg-slate-950/42 p-3">
+                  <div className="truncate text-sm font-black text-white">{request.fromDisplayName || "Player"}</div>
+                  <div className="mt-2 grid grid-cols-2 gap-2">
+                    <button type="button" onClick={() => respond(request.id, "accepted")} className="inline-flex items-center justify-center gap-1 rounded-md bg-cyan-200 px-2 py-2 text-[10px] font-black uppercase text-slate-950">
+                      <Check className="h-3.5 w-3.5" aria-hidden="true" />
+                      Accept
+                    </button>
+                    <button type="button" onClick={() => respond(request.id, "declined")} className="inline-flex items-center justify-center gap-1 rounded-md border border-white/14 bg-white/8 px-2 py-2 text-[10px] font-black uppercase text-white">
+                      <X className="h-3.5 w-3.5" aria-hidden="true" />
+                      Decline
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+
+          <div className="grid max-h-56 gap-2 overflow-y-auto pr-1">
+            {loading && (
+              <div className="flex items-center gap-2 rounded-lg border border-white/12 bg-slate-950/42 p-3 text-xs font-bold text-slate-200">
+                <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />
+                Searching
+              </div>
+            )}
+            {!loading && searchTerm.trim().length >= 2 && results.length === 0 && (
+              <div className="rounded-lg border border-white/12 bg-slate-950/42 p-3 text-xs font-bold text-slate-200">No matching players found.</div>
+            )}
+            {results.map((profile) => {
+              const canAdd = !profile.friendState || profile.friendState.status === "none" || profile.friendState.status === "declined" || profile.friendState.status === "cancelled";
+              return (
+                <div key={profile.uid} className="flex items-center justify-between gap-3 rounded-lg border border-white/12 bg-slate-950/42 p-3">
+                  <div className="min-w-0">
+                    <div className="truncate text-sm font-black text-white">{profile.displayName}</div>
+                    <div className="text-[10px] font-black uppercase text-slate-300">@{profile.playerTag}</div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => canAdd && sendRequest(profile)}
+                    disabled={!canAdd}
+                    className="inline-flex shrink-0 items-center gap-1 rounded-md border border-white/14 bg-white/8 px-2 py-2 text-[10px] font-black uppercase text-white transition hover:bg-white/14 disabled:cursor-not-allowed disabled:opacity-60"
+                  >
+                    {canAdd ? <UserPlus className="h-3.5 w-3.5" aria-hidden="true" /> : <Send className="h-3.5 w-3.5" aria-hidden="true" />}
+                    {stateLabel(profile.friendState)}
+                  </button>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+    </section>
+  );
+}
 
 export default function ThreeCarGame() {
   const mountRef = useRef(null);
   const swipeStartXRef = useRef(null);
   const currentUserRef = useRef(null);
   const saveRunRef = useRef(null);
+  const awardCoinsRef = useRef(null);
+  const runCoinsRef = useRef(0);
+  const coinBalanceRef = useRef(readLocalNumber(LOCAL_COINS_KEY));
+  const totalCoinsRef = useRef(Math.max(readLocalNumber(LOCAL_TOTAL_COINS_KEY), readLocalNumber(LOCAL_COINS_KEY)));
+  const coinPopupIdRef = useRef(0);
   const settingsRef = useRef(readGameSettings());
   const gameRef = useRef({
     started: false,
@@ -438,6 +907,7 @@ export default function ThreeCarGame() {
     lane: 1,
     targetX: 0,
     obstacles: [],
+    coins: [],
     animatedRoadItems: [],
     wheelGroups: [],
     weatherState: null,
@@ -456,21 +926,58 @@ export default function ThreeCarGame() {
   const [highScore, setHighScore] = useState(readLocalHighScore);
   const [lastScore, setLastScore] = useState(() => readLocalNumber(LOCAL_LAST_SCORE_KEY));
   const [gamesPlayed, setGamesPlayed] = useState(() => readLocalNumber(LOCAL_RUNS_KEY));
+  const [coins, setCoins] = useState(() => readLocalNumber(LOCAL_COINS_KEY));
+  const [totalCoins, setTotalCoins] = useState(() => Math.max(readLocalNumber(LOCAL_TOTAL_COINS_KEY), readLocalNumber(LOCAL_COINS_KEY)));
+  const [lastRunCoins, setLastRunCoins] = useState(() => readLocalNumber(LOCAL_LAST_RUN_COINS_KEY));
+  const [runCoins, setRunCoins] = useState(0);
+  const [coinPopups, setCoinPopups] = useState([]);
+  const [dialog, setDialog] = useState(null);
   const [settings, setSettings] = useState(settingsRef.current);
   const [currentUser, setCurrentUser] = useState(null);
   const [authBusy, setAuthBusy] = useState(true);
   const [authError, setAuthError] = useState("");
   const [saveTarget, setSaveTarget] = useState("Local");
 
-  const saveFinishedRun = useCallback(async (finalScore) => {
+  const awardCoins = useCallback((amount) => {
+    const safeAmount = Math.max(0, Math.floor(amount));
+    if (!safeAmount) return;
+
+    const nextCoins = coinBalanceRef.current + safeAmount;
+    const nextTotalCoins = totalCoinsRef.current + safeAmount;
+    const nextRunCoins = runCoinsRef.current + safeAmount;
+    coinBalanceRef.current = nextCoins;
+    totalCoinsRef.current = nextTotalCoins;
+    runCoinsRef.current = nextRunCoins;
+    writeLocalNumber(LOCAL_COINS_KEY, nextCoins);
+    writeLocalNumber(LOCAL_TOTAL_COINS_KEY, nextTotalCoins);
+    writeLocalNumber(LOCAL_LAST_RUN_COINS_KEY, nextRunCoins);
+    setCoins(nextCoins);
+    setTotalCoins(nextTotalCoins);
+    setRunCoins(nextRunCoins);
+
+    const popupId = coinPopupIdRef.current + 1;
+    coinPopupIdRef.current = popupId;
+    setCoinPopups((previousPopups) => [...previousPopups.slice(-3), { id: popupId, amount: safeAmount }]);
+    window.setTimeout(() => {
+      setCoinPopups((previousPopups) => previousPopups.filter((popup) => popup.id !== popupId));
+    }, 900);
+  }, []);
+
+  useEffect(() => {
+    awardCoinsRef.current = awardCoins;
+  }, [awardCoins]);
+
+  const saveFinishedRun = useCallback(async (finalScore, finalRunCoins = runCoinsRef.current) => {
     const localHighScore = Math.max(readLocalHighScore(), finalScore);
     const nextLocalRuns = readLocalNumber(LOCAL_RUNS_KEY) + 1;
     writeLocalHighScore(localHighScore);
     writeLocalNumber(LOCAL_LAST_SCORE_KEY, finalScore);
     writeLocalNumber(LOCAL_RUNS_KEY, nextLocalRuns);
+    writeLocalNumber(LOCAL_LAST_RUN_COINS_KEY, finalRunCoins);
     setHighScore((previousHighScore) => Math.max(previousHighScore, localHighScore));
     setLastScore(finalScore);
     setGamesPlayed(nextLocalRuns);
+    setLastRunCoins(finalRunCoins);
 
     const user = currentUserRef.current;
     if (!user) {
@@ -480,7 +987,7 @@ export default function ThreeCarGame() {
 
     setSaveTarget("Saving");
     try {
-      const progress = await saveUserRun(user, finalScore);
+      const progress = await saveUserRun(user, { score: finalScore, runCoins: finalRunCoins });
       if (progress?.highScore) {
         writeLocalHighScore(progress.highScore);
         setHighScore(progress.highScore);
@@ -488,6 +995,20 @@ export default function ThreeCarGame() {
       if (progress?.gamesPlayed) {
         writeLocalNumber(LOCAL_RUNS_KEY, progress.gamesPlayed);
         setGamesPlayed(progress.gamesPlayed);
+      }
+      if (Number.isFinite(progress?.coins)) {
+        coinBalanceRef.current = progress.coins;
+        writeLocalNumber(LOCAL_COINS_KEY, progress.coins);
+        setCoins(progress.coins);
+      }
+      if (Number.isFinite(progress?.totalCoins)) {
+        totalCoinsRef.current = progress.totalCoins;
+        writeLocalNumber(LOCAL_TOTAL_COINS_KEY, progress.totalCoins);
+        setTotalCoins(progress.totalCoins);
+      }
+      if (Number.isFinite(progress?.lastRunCoins)) {
+        writeLocalNumber(LOCAL_LAST_RUN_COINS_KEY, progress.lastRunCoins);
+        setLastRunCoins(progress.lastRunCoins);
       }
       setAuthError("");
       setSaveTarget("Cloud");
@@ -516,28 +1037,17 @@ export default function ThreeCarGame() {
 
       setSaveTarget("Syncing");
       try {
-        const localHighScore = readLocalHighScore();
-        const localLastScore = readLocalNumber(LOCAL_LAST_SCORE_KEY);
-        const localRuns = readLocalNumber(LOCAL_RUNS_KEY);
-        const progress = await getUserProgress(user.uid);
-        const cloudHighScore = progress?.highScore || 0;
-        const cloudLastScore = progress?.lastScore || 0;
-        const cloudRuns = progress?.gamesPlayed || 0;
-        const bestHighScore = Math.max(localHighScore, cloudHighScore);
-        const bestRuns = Math.max(localRuns, cloudRuns);
-        const latestScore = cloudLastScore || localLastScore;
-
-        if (localHighScore > cloudHighScore) {
-          await syncLocalHighScore(user, localHighScore);
-        }
-
+        const progress = await syncLocalProgress(user, readLocalProgress());
         if (!cancelled) {
-          writeLocalHighScore(bestHighScore);
-          writeLocalNumber(LOCAL_LAST_SCORE_KEY, latestScore);
-          writeLocalNumber(LOCAL_RUNS_KEY, bestRuns);
-          setHighScore(bestHighScore);
-          setLastScore(latestScore);
-          setGamesPlayed(bestRuns);
+          writeLocalProgress(progress);
+          coinBalanceRef.current = progress.coins || 0;
+          totalCoinsRef.current = progress.totalCoins || progress.coins || 0;
+          setHighScore(progress.highScore || 0);
+          setLastScore(progress.lastScore || 0);
+          setGamesPlayed(progress.gamesPlayed || 0);
+          setCoins(progress.coins || 0);
+          setTotalCoins(progress.totalCoins || progress.coins || 0);
+          setLastRunCoins(progress.lastRunCoins || 0);
           setAuthError("");
           setSaveTarget("Cloud");
         }
@@ -563,6 +1073,9 @@ export default function ThreeCarGame() {
       return nextSettings;
     });
   };
+  const closeDialog = useCallback(() => setDialog(null), []);
+  const openModeDialog = useCallback((modeKey) => setDialog({ type: "mode-info", modeKey }), []);
+  const openShopDialog = useCallback(() => setDialog({ type: "shop-coming-soon" }), []);
 
   useEffect(() => {
     const mount = mountRef.current;
@@ -571,6 +1084,7 @@ export default function ThreeCarGame() {
     const state = gameRef.current;
     state.animatedRoadItems = [];
     state.obstacles = [];
+    state.coins = [];
     state.wheelGroups = [];
     state.weatherState = {
       elapsed: 0,
@@ -697,6 +1211,7 @@ export default function ThreeCarGame() {
       snowCover: { value: 0 },
       skySunDirection: { value: new THREE.Vector3(-0.5, 0.72, 0.22).normalize() },
     };
+    const coinTexture = createCoinTexture();
 
     const materials = {
       sky: new THREE.ShaderMaterial({
@@ -880,6 +1395,35 @@ export default function ThreeCarGame() {
         opacity: 0.24,
         depthWrite: false,
       }),
+      coin: new THREE.MeshPhysicalMaterial({
+        color: 0xf8b924,
+        roughness: 0.18,
+        metalness: 0.86,
+        clearcoat: 1,
+        clearcoatRoughness: 0.08,
+        emissive: 0x8f5600,
+        emissiveIntensity: 0.12,
+        envMapIntensity: 1.8,
+      }),
+      coinRim: new THREE.MeshPhysicalMaterial({
+        color: 0xffd66a,
+        roughness: 0.12,
+        metalness: 0.92,
+        clearcoat: 1,
+        clearcoatRoughness: 0.05,
+        envMapIntensity: 1.9,
+      }),
+      coinFace: new THREE.MeshBasicMaterial({
+        map: coinTexture,
+        transparent: true,
+      }),
+      coinGlow: new THREE.MeshBasicMaterial({
+        color: 0xffd76a,
+        transparent: true,
+        opacity: 0.2,
+        blending: THREE.AdditiveBlending,
+        depthWrite: false,
+      }),
     };
 
     const snowTintColor = new THREE.Color(0xb9c5c7);
@@ -912,6 +1456,8 @@ export default function ThreeCarGame() {
       materials.glass,
       materials.chrome,
       materials.rim,
+      materials.coin,
+      materials.coinRim,
     ].forEach((material) => {
       material.envMap = cubeReflectionTarget.texture;
       material.needsUpdate = true;
@@ -963,6 +1509,10 @@ export default function ThreeCarGame() {
       sunBlock: new THREE.BoxGeometry(2.2, 2.2, 0.08),
       rainStreak: new THREE.BoxGeometry(0.026, 0.9, 0.026),
       snowFlake: new THREE.BoxGeometry(0.1, 0.1, 0.1),
+      coinBody: new THREE.CylinderGeometry(0.36, 0.36, 0.1, 36, 1, false),
+      coinRim: new THREE.TorusGeometry(0.31, 0.035, 8, 36),
+      coinFace: new THREE.CircleGeometry(0.28, 36),
+      coinGlow: new THREE.CircleGeometry(0.58, 36),
       carBody: new THREE.BoxGeometry(1.35, 0.42, 2.3),
       carHood: new THREE.BoxGeometry(1.2, 0.18, 0.7),
       carRear: new THREE.BoxGeometry(1.15, 0.2, 0.55),
@@ -1491,6 +2041,41 @@ export default function ThreeCarGame() {
 
     state.obstacles = [createObstacleCar(-38), createObstacleCar(-62), createObstacleCar(-86)];
 
+    function coinLaneBlocked(lane, z) {
+      return state.obstacles.some((obstacle) => Math.abs(obstacle.position.x - LANES[lane]) < 0.1 && Math.abs(obstacle.position.z - z) < 7.5);
+    }
+
+    function resetCoin(coin, index = 0) {
+      const driveMode = getDriveMode(settingsRef.current);
+      let lane = Math.floor(Math.random() * LANES.length);
+      let z = -32 - index * (driveMode.obstacleGap * 0.58) - Math.random() * 7;
+
+      for (let attempt = 0; attempt < 6 && coinLaneBlocked(lane, z); attempt += 1) {
+        lane = Math.floor(Math.random() * LANES.length);
+        z -= 5 + Math.random() * 7;
+      }
+
+      coin.lane = lane;
+      coin.collected = false;
+      coin.baseY = 1.12 + Math.random() * 0.1;
+      coin.object.visible = true;
+      coin.object.scale.setScalar(1);
+      coin.object.position.set(LANES[lane], coin.baseY, z);
+      coin.object.rotation.set(0, Math.random() * Math.PI * 2, 0);
+    }
+
+    function createCoin(index) {
+      const object = createCoinObject(geometries, materials);
+      object.userData.halfW = 0.48;
+      object.userData.halfZ = 0.48;
+      scene.add(object);
+      const coin = { object, lane: 1, value: 1, collected: false, baseY: 1.1 };
+      resetCoin(coin, index);
+      return coin;
+    }
+
+    state.coins = Array.from({ length: COIN_POOL_SIZE }, (_, index) => createCoin(index));
+
     const particleDummy = new THREE.Object3D();
 
     function createWeatherParticlePool(type, count) {
@@ -1777,7 +2362,11 @@ export default function ThreeCarGame() {
         obstacle.position.x = LANES[Math.floor(Math.random() * LANES.length)];
         obstacle.userData.passed = false;
       });
+      state.coins.forEach((coin, index) => resetCoin(coin, index));
+      runCoinsRef.current = 0;
       setScore(0);
+      setRunCoins(0);
+      setCoinPopups([]);
       setSpeedKmh(speedToKmh(driveMode.startSpeed));
       setGameOver(false);
       setCrashFlash(false);
@@ -1905,6 +2494,19 @@ export default function ThreeCarGame() {
         state.wheelGroups[i].rotation.x -= wheelSpin;
       }
 
+      for (let i = 0; i < state.coins.length; i++) {
+        const coin = state.coins[i];
+        coin.object.position.z += roadMove;
+        coin.object.rotation.y += (moving ? 0.12 : 0.035) * frameScale;
+        coin.object.position.y = coin.baseY + Math.sin(nowSeconds * 4 + i) * 0.08;
+        if (coin.object.userData.glow) {
+          coin.object.userData.glow.material.opacity = runSettings.visualEffects ? 0.22 : 0.05;
+        }
+        if (coin.object.position.z > 12) {
+          resetCoin(coin, i + COIN_POOL_SIZE);
+        }
+      }
+
       if (moving) {
         state.score += 0.2 * frameScale * driveMode.scoreMultiplier;
         state.speed = Math.min(driveMode.maxSpeed, driveMode.startSpeed + state.score / driveMode.speedRamp);
@@ -1942,14 +2544,31 @@ export default function ThreeCarGame() {
           if (intersectsFast(player, obstacle)) {
             state.gameOver = true;
             const finalScore = Math.floor(state.score);
+            const finalRunCoins = runCoinsRef.current;
             crashBlur = BLUR_TUNING.crashKick;
             setScore(finalScore);
             setGameOver(true);
             setCrashFlash(true);
-            saveRunRef.current?.(finalScore);
+            saveRunRef.current?.(finalScore, finalRunCoins);
             if (crashFlashTimer) window.clearTimeout(crashFlashTimer);
             crashFlashTimer = window.setTimeout(() => setCrashFlash(false), 180);
             break;
+          }
+        }
+
+        if (!state.gameOver) {
+          for (let i = 0; i < state.coins.length; i++) {
+            const coin = state.coins[i];
+            if (
+              !coin.collected &&
+              Math.abs(coin.object.position.x - player.position.x) < 0.72 &&
+              Math.abs(coin.object.position.z - player.position.z) < 0.95
+            ) {
+              coin.collected = true;
+              const reward = getCoinReward(driveMode);
+              awardCoinsRef.current?.(reward);
+              resetCoin(coin, i + COIN_POOL_SIZE);
+            }
           }
         }
       } else {
@@ -2039,6 +2658,7 @@ export default function ThreeCarGame() {
       environmentTexture.dispose();
       cubeReflectionTarget.dispose();
       pmremGenerator.dispose();
+      coinTexture.dispose();
       scene.environment = null;
       scene.traverse((object) => {
         if (object.material && !Object.values(materials).includes(object.material) && !obstacleMaterials.includes(object.material)) {
@@ -2054,6 +2674,7 @@ export default function ThreeCarGame() {
       Object.values(materials).forEach((material) => material.dispose());
       obstacleMaterials.forEach((material) => material.dispose());
       state.obstacles = [];
+      state.coins = [];
       state.animatedRoadItems = [];
       state.wheelGroups = [];
       state.moveLane = null;
@@ -2074,6 +2695,8 @@ export default function ThreeCarGame() {
     setGameOver(false);
     setCrashFlash(false);
     setScore(0);
+    runCoinsRef.current = 0;
+    setRunCoins(0);
     setSpeedKmh(speedToKmh(driveMode.startSpeed));
   };
   const handleSignIn = async () => {
@@ -2181,6 +2804,13 @@ export default function ThreeCarGame() {
                 <div className="text-[10px] font-black uppercase text-amber-200">Best</div>
                 <div className="text-2xl font-black leading-none tabular-nums sm:text-3xl">{highScore}</div>
               </div>
+              <div className="min-w-24 rounded-lg border border-white/15 bg-slate-950/72 px-3 py-2 shadow-xl backdrop-blur-md sm:min-w-28">
+                <div className="flex items-center gap-1 text-[10px] font-black uppercase text-amber-200">
+                  <CoinIcon className="h-3.5 w-3.5" />
+                  Coins
+                </div>
+                <div className="text-2xl font-black leading-none tabular-nums sm:text-3xl">{runCoins}</div>
+              </div>
               <div className="relative h-20 w-20 rounded-full border border-white/15 bg-slate-950/72 shadow-xl backdrop-blur-md sm:h-24 sm:w-24">
                 <div className="absolute inset-1 rounded-full" style={speedGaugeStyle} />
                 <div className="absolute inset-3 rounded-full bg-slate-950/95 shadow-inner" />
@@ -2221,7 +2851,7 @@ export default function ThreeCarGame() {
                     </div>
                   </div>
 
-                  <div className="mt-5 grid grid-cols-3 gap-2 sm:mt-7 sm:gap-3">
+                  <div className="mt-5 grid grid-cols-2 gap-2 sm:mt-7 sm:grid-cols-4 sm:gap-3">
                     <div className="rounded-lg border border-white/12 bg-white/8 p-2.5 sm:p-3">
                       <div className="flex items-center gap-2 text-[10px] font-black uppercase text-cyan-200">
                         <Gauge className="h-3.5 w-3.5" aria-hidden="true" />
@@ -2243,20 +2873,29 @@ export default function ThreeCarGame() {
                       </div>
                       <div className="mt-2 text-2xl font-black leading-none tabular-nums text-white sm:text-3xl">{gamesPlayed}</div>
                     </div>
+                    <div className="rounded-lg border border-white/12 bg-white/8 p-2.5 sm:p-3">
+                      <div className="flex items-center gap-2 text-[10px] font-black uppercase text-amber-200">
+                        <Coins className="h-3.5 w-3.5" aria-hidden="true" />
+                        Coins
+                      </div>
+                      <div className="mt-2 text-2xl font-black leading-none tabular-nums text-white sm:text-3xl">{coins}</div>
+                    </div>
                   </div>
                 </div>
 
                 <div className="mt-5 sm:mt-8">
                   <div className="grid gap-2 sm:grid-cols-3">
                     {DRIVE_MODE_KEYS.map((modeKey) => (
-                      <button
-                        key={modeKey}
-                        type="button"
-                        onClick={() => updateSetting("driveMode", modeKey)}
-                        className={settingButtonClass(settings.driveMode === modeKey)}
-                      >
-                        {DRIVE_MODES[modeKey].label}
-                      </button>
+                      <div key={modeKey} className="grid grid-cols-[1fr_auto] gap-2">
+                        <button
+                          type="button"
+                          onClick={() => updateSetting("driveMode", modeKey)}
+                          className={settingButtonClass(settings.driveMode === modeKey)}
+                        >
+                          {DRIVE_MODES[modeKey].label}
+                        </button>
+                        <ModeInfoButton modeKey={modeKey} onOpen={openModeDialog} />
+                      </div>
                     ))}
                   </div>
                   <button
@@ -2302,6 +2941,8 @@ export default function ThreeCarGame() {
                   </div>
                   {authError && <div className="mt-3 rounded-md border border-red-300/20 bg-red-500/10 px-3 py-2 text-xs font-bold text-red-100">{authError}</div>}
                 </section>
+
+                <ShopButton coins={coins} onOpen={openShopDialog} />
 
                 <section className="rounded-lg border border-white/12 bg-white/8 p-4">
                   <div className="mb-4 flex items-center gap-2 text-sm font-black uppercase text-white">
@@ -2349,6 +2990,13 @@ export default function ThreeCarGame() {
                     </div>
                   </div>
                 </section>
+
+                <FriendsPanel
+                  currentUser={currentUser}
+                  authBusy={authBusy}
+                  onSignIn={handleSignIn}
+                  onDialog={setDialog}
+                />
               </aside>
             </div>
           </div>
@@ -2369,6 +3017,20 @@ export default function ThreeCarGame() {
                     <div className="rounded-lg border border-white/12 bg-slate-950/50 p-3">
                       <div className="text-[10px] font-black uppercase text-cyan-200">Mode</div>
                       <div className="mt-1 truncate text-base font-black uppercase">{driveMode.label}</div>
+                    </div>
+                    <div className="rounded-lg border border-white/12 bg-slate-950/50 p-3">
+                      <div className="text-[10px] font-black uppercase text-amber-200">Run Coins</div>
+                      <div className="mt-1 flex items-center gap-2 text-2xl font-black leading-none tabular-nums">
+                        <CoinIcon className="h-5 w-5" />
+                        {runCoins || lastRunCoins}
+                      </div>
+                    </div>
+                    <div className="rounded-lg border border-white/12 bg-slate-950/50 p-3">
+                      <div className="text-[10px] font-black uppercase text-amber-200">Total Coins</div>
+                      <div className="mt-1 flex items-center gap-2 text-2xl font-black leading-none tabular-nums">
+                        <CoinIcon className="h-5 w-5" />
+                        {totalCoins}
+                      </div>
                     </div>
                   </div>
                   <button
@@ -2410,16 +3072,18 @@ export default function ThreeCarGame() {
                       {accountAction}
                     </button>
                   </div>
-                  <div className="mt-4 grid grid-cols-3 gap-2">
+                  <div className="mt-4 grid gap-2">
                     {DRIVE_MODE_KEYS.map((modeKey) => (
-                      <button
-                        key={modeKey}
-                        type="button"
-                        onClick={() => updateSetting("driveMode", modeKey)}
-                        className={settingButtonClass(settings.driveMode === modeKey)}
-                      >
-                        {DRIVE_MODES[modeKey].label}
-                      </button>
+                      <div key={modeKey} className="grid grid-cols-[1fr_auto] gap-1">
+                        <button
+                          type="button"
+                          onClick={() => updateSetting("driveMode", modeKey)}
+                          className={settingButtonClass(settings.driveMode === modeKey)}
+                        >
+                          {DRIVE_MODES[modeKey].label}
+                        </button>
+                        <ModeInfoButton modeKey={modeKey} onOpen={openModeDialog} />
+                      </div>
                     ))}
                   </div>
                   {authError && <div className="mt-3 rounded-md border border-red-300/20 bg-red-500/10 px-3 py-2 text-xs font-bold text-red-100">{authError}</div>}
@@ -2430,6 +3094,15 @@ export default function ThreeCarGame() {
         )}
 
         {crashFlash && <div className="pointer-events-none absolute inset-0 z-30 bg-white/30" />}
+
+        <div className="pointer-events-none absolute right-5 top-28 z-30 grid gap-2">
+          {coinPopups.map((popup) => (
+            <div key={popup.id} className="flex items-center gap-2 rounded-lg border border-amber-200/30 bg-slate-950/76 px-3 py-2 text-sm font-black text-amber-100 shadow-xl backdrop-blur-md">
+              <CoinIcon className="h-5 w-5" />
+              +{popup.amount}
+            </div>
+          ))}
+        </div>
 
         {showRunHud && (
           <div className="pointer-events-none absolute bottom-5 left-5 z-20 hidden items-center gap-2 rounded-lg border border-white/10 bg-slate-950/64 px-3 py-2 text-xs font-semibold text-slate-300 backdrop-blur-md sm:flex">
@@ -2471,6 +3144,8 @@ export default function ThreeCarGame() {
             </button>
           </div>
         )}
+
+        <GameDialog dialog={dialog} onClose={closeDialog} coins={coins} />
       </div>
     </div>
   );
