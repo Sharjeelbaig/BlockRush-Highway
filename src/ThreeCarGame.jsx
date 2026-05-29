@@ -1,4 +1,20 @@
-import React, { useEffect, useRef, useState } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
+import {
+  ChevronLeft,
+  ChevronRight,
+  Cloud,
+  CloudOff,
+  Gamepad2,
+  Gauge,
+  LogOut,
+  Play,
+  RotateCcw,
+  Settings,
+  Sparkles,
+  Trophy,
+  User,
+  Zap,
+} from "lucide-react";
 import * as THREE from "three";
 import { RoomEnvironment } from "three/addons/environments/RoomEnvironment.js";
 import { EffectComposer } from "three/addons/postprocessing/EffectComposer.js";
@@ -6,6 +22,14 @@ import { OutputPass } from "three/addons/postprocessing/OutputPass.js";
 import { RenderPass } from "three/addons/postprocessing/RenderPass.js";
 import { ShaderPass } from "three/addons/postprocessing/ShaderPass.js";
 import { UnrealBloomPass } from "three/addons/postprocessing/UnrealBloomPass.js";
+import {
+  getUserProgress,
+  listenForAuth,
+  saveUserRun,
+  signInWithGoogle,
+  signOutUser,
+  syncLocalHighScore,
+} from "./firebase.js";
 
 const LANE_LINE_X = 1.35;
 const LANE_WIDTH = LANE_LINE_X * 2;
@@ -35,6 +59,46 @@ const CAMERA_MOBILE_Z_BONUS = 3.15;
 const WEATHER_HOLD_SECONDS = 35;
 const WEATHER_TRANSITION_SECONDS = 8;
 const WEATHER_SEQUENCE = ["clear_noon", "sunny_golden_hour", "rain_dusk", "thunder_night", "snow_dawn"];
+const LOCAL_HIGH_SCORE_KEY = "blockrush.highScore";
+const LOCAL_LAST_SCORE_KEY = "blockrush.lastScore";
+const LOCAL_RUNS_KEY = "blockrush.runs";
+const LOCAL_SETTINGS_KEY = "blockrush.settings";
+const DEFAULT_SETTINGS = {
+  driveMode: "rush",
+  visualEffects: true,
+  weatherFx: true,
+  controlSide: "left",
+};
+const DRIVE_MODES = {
+  cruise: {
+    label: "Cruise",
+    startSpeed: 0.16,
+    maxSpeed: 0.44,
+    scoreMultiplier: 0.85,
+    speedRamp: 3200,
+    obstacleGap: 30,
+    resetDepth: 92,
+  },
+  rush: {
+    label: "Rush",
+    startSpeed: START_SPEED,
+    maxSpeed: MAX_SPEED,
+    scoreMultiplier: 1,
+    speedRamp: 2400,
+    obstacleGap: 24,
+    resetDepth: 76,
+  },
+  overdrive: {
+    label: "Overdrive",
+    startSpeed: 0.22,
+    maxSpeed: 0.58,
+    scoreMultiplier: 1.28,
+    speedRamp: 1850,
+    obstacleGap: 21,
+    resetDepth: 68,
+  },
+};
+const DRIVE_MODE_KEYS = ["cruise", "rush", "overdrive"];
 const WEATHER_PRESETS = {
   clear_noon: {
     skyTop: new THREE.Color(0x3b9fe0),
@@ -314,10 +378,58 @@ function speedToKmh(speed) {
   const speedProgress = (speed - START_SPEED) / (MAX_SPEED - START_SPEED);
   return Math.round(SPEED_KMH_MIN + clamp(speedProgress, 0, 1) * (SPEED_KMH_MAX - SPEED_KMH_MIN));
 }
+function readLocalNumber(key) {
+  if (typeof window === "undefined") return 0;
+  const storedValue = Number.parseInt(window.localStorage.getItem(key) || "0", 10);
+  return Number.isFinite(storedValue) ? storedValue : 0;
+}
+function writeLocalNumber(key, value) {
+  if (typeof window === "undefined") return;
+  window.localStorage.setItem(key, String(Math.max(0, Math.floor(value))));
+}
+function readLocalHighScore() {
+  return readLocalNumber(LOCAL_HIGH_SCORE_KEY);
+}
+function writeLocalHighScore(score) {
+  writeLocalNumber(LOCAL_HIGH_SCORE_KEY, score);
+}
+function readGameSettings() {
+  if (typeof window === "undefined") return DEFAULT_SETTINGS;
+
+  try {
+    const storedSettings = JSON.parse(window.localStorage.getItem(LOCAL_SETTINGS_KEY) || "{}");
+    return {
+      ...DEFAULT_SETTINGS,
+      ...storedSettings,
+    };
+  } catch {
+    return DEFAULT_SETTINGS;
+  }
+}
+function writeGameSettings(settings) {
+  if (typeof window === "undefined") return;
+  window.localStorage.setItem(LOCAL_SETTINGS_KEY, JSON.stringify(settings));
+}
+function getDriveMode(settings) {
+  return DRIVE_MODES[settings.driveMode] || DRIVE_MODES.rush;
+}
+function GoogleIcon({ className = "h-4 w-4" }) {
+  return (
+    <svg viewBox="0 0 24 24" className={className} aria-hidden="true">
+      <path fill="#4285F4" d="M23.5 12.3c0-.8-.1-1.6-.2-2.3H12v4.4h6.5c-.3 1.4-1.1 2.7-2.4 3.5v2.9H20c2.2-2.1 3.5-5.1 3.5-8.5Z" />
+      <path fill="#34A853" d="M12 24c3.2 0 5.9-1.1 7.9-2.9L16 18.2c-1.1.7-2.4 1.1-4 1.1-3.1 0-5.7-2.1-6.7-4.9h-4v3C3.3 21.3 7.3 24 12 24Z" />
+      <path fill="#FBBC05" d="M5.3 14.4c-.2-.7-.4-1.5-.4-2.4s.1-1.7.4-2.4v-3h-4A12 12 0 0 0 0 12c0 1.9.5 3.7 1.3 5.4l4-3Z" />
+      <path fill="#EA4335" d="M12 4.7c1.7 0 3.3.6 4.5 1.8l3.4-3.4A11.6 11.6 0 0 0 12 0C7.3 0 3.3 2.7 1.3 6.6l4 3C6.3 6.8 8.9 4.7 12 4.7Z" />
+    </svg>
+  );
+}
 
 export default function ThreeCarGame() {
   const mountRef = useRef(null);
   const swipeStartXRef = useRef(null);
+  const currentUserRef = useRef(null);
+  const saveRunRef = useRef(null);
+  const settingsRef = useRef(readGameSettings());
   const gameRef = useRef({
     started: false,
     gameOver: false,
@@ -341,6 +453,116 @@ export default function ThreeCarGame() {
   const [gameOver, setGameOver] = useState(false);
   const [started, setStarted] = useState(false);
   const [crashFlash, setCrashFlash] = useState(false);
+  const [highScore, setHighScore] = useState(readLocalHighScore);
+  const [lastScore, setLastScore] = useState(() => readLocalNumber(LOCAL_LAST_SCORE_KEY));
+  const [gamesPlayed, setGamesPlayed] = useState(() => readLocalNumber(LOCAL_RUNS_KEY));
+  const [settings, setSettings] = useState(settingsRef.current);
+  const [currentUser, setCurrentUser] = useState(null);
+  const [authBusy, setAuthBusy] = useState(true);
+  const [authError, setAuthError] = useState("");
+  const [saveTarget, setSaveTarget] = useState("Local");
+
+  const saveFinishedRun = useCallback(async (finalScore) => {
+    const localHighScore = Math.max(readLocalHighScore(), finalScore);
+    const nextLocalRuns = readLocalNumber(LOCAL_RUNS_KEY) + 1;
+    writeLocalHighScore(localHighScore);
+    writeLocalNumber(LOCAL_LAST_SCORE_KEY, finalScore);
+    writeLocalNumber(LOCAL_RUNS_KEY, nextLocalRuns);
+    setHighScore((previousHighScore) => Math.max(previousHighScore, localHighScore));
+    setLastScore(finalScore);
+    setGamesPlayed(nextLocalRuns);
+
+    const user = currentUserRef.current;
+    if (!user) {
+      setSaveTarget("Local");
+      return;
+    }
+
+    setSaveTarget("Saving");
+    try {
+      const progress = await saveUserRun(user, finalScore);
+      if (progress?.highScore) {
+        writeLocalHighScore(progress.highScore);
+        setHighScore(progress.highScore);
+      }
+      if (progress?.gamesPlayed) {
+        writeLocalNumber(LOCAL_RUNS_KEY, progress.gamesPlayed);
+        setGamesPlayed(progress.gamesPlayed);
+      }
+      setAuthError("");
+      setSaveTarget("Cloud");
+    } catch (error) {
+      setAuthError(error.message || "Could not save progress.");
+      setSaveTarget("Offline");
+    }
+  }, []);
+
+  useEffect(() => {
+    saveRunRef.current = saveFinishedRun;
+  }, [saveFinishedRun]);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    const unsubscribe = listenForAuth(async (user) => {
+      currentUserRef.current = user;
+      setCurrentUser(user);
+      setAuthBusy(false);
+
+      if (!user) {
+        setSaveTarget("Local");
+        return;
+      }
+
+      setSaveTarget("Syncing");
+      try {
+        const localHighScore = readLocalHighScore();
+        const localLastScore = readLocalNumber(LOCAL_LAST_SCORE_KEY);
+        const localRuns = readLocalNumber(LOCAL_RUNS_KEY);
+        const progress = await getUserProgress(user.uid);
+        const cloudHighScore = progress?.highScore || 0;
+        const cloudLastScore = progress?.lastScore || 0;
+        const cloudRuns = progress?.gamesPlayed || 0;
+        const bestHighScore = Math.max(localHighScore, cloudHighScore);
+        const bestRuns = Math.max(localRuns, cloudRuns);
+        const latestScore = cloudLastScore || localLastScore;
+
+        if (localHighScore > cloudHighScore) {
+          await syncLocalHighScore(user, localHighScore);
+        }
+
+        if (!cancelled) {
+          writeLocalHighScore(bestHighScore);
+          writeLocalNumber(LOCAL_LAST_SCORE_KEY, latestScore);
+          writeLocalNumber(LOCAL_RUNS_KEY, bestRuns);
+          setHighScore(bestHighScore);
+          setLastScore(latestScore);
+          setGamesPlayed(bestRuns);
+          setAuthError("");
+          setSaveTarget("Cloud");
+        }
+      } catch (error) {
+        if (!cancelled) {
+          setAuthError(error.message || "Could not sync progress.");
+          setSaveTarget("Offline");
+        }
+      }
+    });
+
+    return () => {
+      cancelled = true;
+      unsubscribe();
+    };
+  }, []);
+
+  const updateSetting = (key, value) => {
+    setSettings((previousSettings) => {
+      const nextSettings = { ...previousSettings, [key]: value };
+      settingsRef.current = nextSettings;
+      writeGameSettings(nextSettings);
+      return nextSettings;
+    });
+  };
 
   useEffect(() => {
     const mount = mountRef.current;
@@ -1528,7 +1750,8 @@ export default function ThreeCarGame() {
       tintMaterialToward(materials.cityDarkWall, snowTintColor, weather.snowCover * 0.06);
       tintMaterialToward(materials.planter, snowTintColor, weather.snowCover * 0.08);
       if (bloomPass && cinematicPass) {
-        bloomPass.strength = weather.bloomStrength + accentBloomAmount * 0.035 + lightBloomAmount * speedProgress * 0.024 + lightning * 0.24;
+        const visualFxScale = settingsRef.current.visualEffects ? 1 : 0.35;
+        bloomPass.strength = (weather.bloomStrength + accentBloomAmount * 0.035 + lightBloomAmount * speedProgress * 0.024 + lightning * 0.24) * visualFxScale;
         bloomPass.radius = 0.42 + accentBloomAmount * 0.12;
         bloomPass.threshold = Math.max(0.68, weather.bloomThreshold - accentBloomAmount * 0.035);
         cinematicPass.uniforms.uTint.value.set(weather.gradeTint.r, weather.gradeTint.g, weather.gradeTint.b);
@@ -1538,10 +1761,11 @@ export default function ThreeCarGame() {
     }
 
     function resetGame() {
+      const driveMode = getDriveMode(settingsRef.current);
       state.started = true;
       state.gameOver = false;
       state.score = 0;
-      state.speed = START_SPEED;
+      state.speed = driveMode.startSpeed;
       state.lane = 1;
       state.targetX = 0;
       state.lastUiScore = -1;
@@ -1549,12 +1773,12 @@ export default function ThreeCarGame() {
       player.position.set(0, 0, PLAYER_Z);
       player.rotation.set(0, 0, 0);
       state.obstacles.forEach((obstacle, index) => {
-        obstacle.position.z = -38 - index * 24;
+        obstacle.position.z = -38 - index * driveMode.obstacleGap;
         obstacle.position.x = LANES[Math.floor(Math.random() * LANES.length)];
         obstacle.userData.passed = false;
       });
       setScore(0);
-      setSpeedKmh(speedToKmh(START_SPEED));
+      setSpeedKmh(speedToKmh(driveMode.startSpeed));
       setGameOver(false);
       setCrashFlash(false);
       setStarted(true);
@@ -1657,6 +1881,10 @@ export default function ThreeCarGame() {
       }
 
       const moving = state.started && !state.gameOver;
+      const runSettings = settingsRef.current;
+      const driveMode = getDriveMode(runSettings);
+      const weatherFxScale = runSettings.weatherFx ? 1 : 0.18;
+      const visualFxScale = runSettings.visualEffects ? 1 : 0.28;
       const roadMove = (moving ? state.speed : 0.012) * frameScale;
       const nowSeconds = now * 0.001;
       const weather = sampleWeather(dt);
@@ -1669,8 +1897,8 @@ export default function ThreeCarGame() {
         }
       }
 
-      updateWeatherParticles(weatherParticles.rain, weather.rainAmount, frameScale, roadMove, nowSeconds);
-      updateWeatherParticles(weatherParticles.snow, weather.snowAmount, frameScale, roadMove, nowSeconds);
+      updateWeatherParticles(weatherParticles.rain, weather.rainAmount * weatherFxScale, frameScale, roadMove, nowSeconds);
+      updateWeatherParticles(weatherParticles.snow, weather.snowAmount * weatherFxScale, frameScale, roadMove, nowSeconds);
 
       const wheelSpin = (moving ? state.speed * 2.8 : 0.025) * frameScale;
       for (let i = 0; i < state.wheelGroups.length; i++) {
@@ -1678,8 +1906,8 @@ export default function ThreeCarGame() {
       }
 
       if (moving) {
-        state.score += 0.2 * frameScale;
-        state.speed = Math.min(MAX_SPEED, START_SPEED + state.score / 2400);
+        state.score += 0.2 * frameScale * driveMode.scoreMultiplier;
+        state.speed = Math.min(driveMode.maxSpeed, driveMode.startSpeed + state.score / driveMode.speedRamp);
         const nextUiScore = Math.floor(state.score);
         if (nextUiScore !== state.lastUiScore) {
           state.lastUiScore = nextUiScore;
@@ -1704,18 +1932,21 @@ export default function ThreeCarGame() {
           obstacle.position.z += state.speed * frameScale;
           if (!obstacle.userData.passed && obstacle.position.z > player.position.z) {
             obstacle.userData.passed = true;
-            state.score += 25;
+            state.score += 25 * driveMode.scoreMultiplier;
           }
           if (obstacle.position.z > 14) {
-            obstacle.position.z = -76 - Math.random() * 34;
+            obstacle.position.z = -driveMode.resetDepth - Math.random() * 34;
             obstacle.position.x = LANES[Math.floor(Math.random() * LANES.length)];
             obstacle.userData.passed = false;
           }
           if (intersectsFast(player, obstacle)) {
             state.gameOver = true;
+            const finalScore = Math.floor(state.score);
             crashBlur = BLUR_TUNING.crashKick;
+            setScore(finalScore);
             setGameOver(true);
             setCrashFlash(true);
+            saveRunRef.current?.(finalScore);
             if (crashFlashTimer) window.clearTimeout(crashFlashTimer);
             crashFlashTimer = window.setTimeout(() => setCrashFlash(false), 180);
             break;
@@ -1753,14 +1984,14 @@ export default function ThreeCarGame() {
           1
         );
         const weatherDepth = Math.max(weather.rainAmount * 0.72, weather.thunderAmount, weather.snowAmount * 0.62);
-        const depthSoftness = clamp(weatherDepth * BLUR_TUNING.weatherDepth * blurQuality, 0, isLowPowerDevice ? 0.12 : 0.24);
+        const depthSoftness = clamp(weatherDepth * BLUR_TUNING.weatherDepth * blurQuality * weatherFxScale * visualFxScale, 0, isLowPowerDevice ? 0.12 : 0.24);
         const blurDirectionX = clamp(cameraDeltaX * 0.18, -0.35, 0.35);
         crashBlur = Math.max(0, crashBlur - dt * 3.4);
         cinematicPass.uniforms.uTime.value = nowSeconds;
         cinematicPass.uniforms.uSpeed.value = speedProgress;
-        cinematicPass.uniforms.uSpeedBlur.value = clamp((speedBlur * 0.54 + laneBlur) * blurQuality, 0, isLowPowerDevice ? 0.46 : 0.72);
+        cinematicPass.uniforms.uSpeedBlur.value = clamp((speedBlur * 0.54 + laneBlur) * blurQuality * visualFxScale, 0, isLowPowerDevice ? 0.46 : 0.72);
         cinematicPass.uniforms.uDepthSoftness.value = depthSoftness;
-        cinematicPass.uniforms.uCrashBlur.value = crashBlur;
+        cinematicPass.uniforms.uCrashBlur.value = crashBlur * visualFxScale;
         cinematicPass.uniforms.uQuality.value = blurQuality;
         cinematicPass.uniforms.uBlurDirection.value.set(blurDirectionX, 1).normalize();
       }
@@ -1832,6 +2063,39 @@ export default function ThreeCarGame() {
 
   const startOrRestart = () => gameRef.current.resetGame?.();
   const moveLane = (direction) => gameRef.current.moveLane?.(direction);
+  const openMainMenu = () => {
+    const driveMode = getDriveMode(settingsRef.current);
+    const state = gameRef.current;
+    state.started = false;
+    state.gameOver = false;
+    state.score = 0;
+    state.speed = driveMode.startSpeed;
+    setStarted(false);
+    setGameOver(false);
+    setCrashFlash(false);
+    setScore(0);
+    setSpeedKmh(speedToKmh(driveMode.startSpeed));
+  };
+  const handleSignIn = async () => {
+    setAuthError("");
+    setAuthBusy(true);
+    try {
+      await signInWithGoogle();
+    } catch (error) {
+      setAuthError(error.message || "Could not sign in.");
+      setAuthBusy(false);
+    }
+  };
+  const handleSignOut = async () => {
+    setAuthError("");
+    setAuthBusy(true);
+    try {
+      await signOutUser();
+    } catch (error) {
+      setAuthError(error.message || "Could not sign out.");
+      setAuthBusy(false);
+    }
+  };
   const handleLaneControl = (direction) => (event) => {
     event.preventDefault();
     event.stopPropagation();
@@ -1854,6 +2118,44 @@ export default function ThreeCarGame() {
     background: `conic-gradient(from -130deg, #22d3ee 0deg, #facc15 ${speedArc}deg, rgba(255,255,255,0.16) ${speedArc}deg 260deg, transparent 260deg 360deg)`,
   };
   const actionLabel = gameOver ? "RETRY" : started ? "RESET" : "START";
+  const accountLabel = authBusy ? "Connecting" : currentUser?.displayName || currentUser?.email || "Guest";
+  const accountAction = currentUser ? "SIGN OUT" : "GOOGLE";
+  const accountIcon = currentUser?.photoURL ? (
+    <img
+      src={currentUser.photoURL}
+      alt=""
+      referrerPolicy="no-referrer"
+      className="h-10 w-10 rounded-lg object-cover"
+    />
+  ) : (
+    <User className="h-5 w-5" aria-hidden="true" />
+  );
+  const syncIcon = currentUser ? (
+    <Cloud className="h-4 w-4" aria-hidden="true" />
+  ) : (
+    <CloudOff className="h-4 w-4" aria-hidden="true" />
+  );
+  const driveMode = getDriveMode(settings);
+  const showRunHud = started && !gameOver;
+  const mobileControlLayout =
+    settings.controlSide === "right"
+      ? "justify-end"
+      : settings.controlSide === "split"
+        ? "justify-between"
+        : "justify-start";
+  const mobileButtonGroupClass = settings.controlSide === "split" ? "flex w-full justify-between" : "flex gap-3";
+  const mobileResetLayout =
+    settings.controlSide === "right"
+      ? "left-5"
+      : settings.controlSide === "split"
+        ? "left-1/2 -translate-x-1/2"
+        : "right-5";
+  const settingButtonClass = (isActive) =>
+    `rounded-lg border px-3 py-2 text-xs font-black uppercase transition ${
+      isActive
+        ? "border-cyan-200 bg-cyan-200 text-slate-950 shadow-[0_0_18px_rgba(103,232,249,0.22)]"
+        : "border-white/14 bg-white/8 text-slate-200 hover:bg-white/14"
+    }`;
 
   return (
     <div
@@ -1868,100 +2170,302 @@ export default function ThreeCarGame() {
       >
         <div ref={mountRef} className="h-full w-full" style={{ height: "100%", width: "100%" }} />
 
-        <div className="pointer-events-none absolute left-3 right-3 top-3 z-20 flex items-start justify-between gap-3 sm:left-6 sm:right-6 sm:top-6">
-          <div className="flex items-start gap-2 sm:gap-3">
-            <div className="min-w-24 rounded-lg border border-white/15 bg-slate-950/70 px-3 py-2 shadow-xl backdrop-blur-md sm:min-w-28">
-              <div className="text-[10px] font-semibold uppercase text-cyan-200">Score</div>
-              <div className="text-2xl font-black leading-none tabular-nums sm:text-3xl">{score}</div>
-            </div>
-            <div className="relative h-20 w-20 rounded-full border border-white/15 bg-slate-950/70 shadow-xl backdrop-blur-md sm:h-24 sm:w-24">
-              <div className="absolute inset-1 rounded-full" style={speedGaugeStyle} />
-              <div className="absolute inset-3 rounded-full bg-slate-950/95 shadow-inner" />
-              <div
-                className="absolute left-1/2 top-1/2 h-[2px] w-[31%] origin-left rounded-full bg-amber-200 shadow-[0_0_12px_rgba(250,204,21,0.8)]"
-                style={{ transform: `rotate(${-130 + speedPercent * 260}deg)` }}
-              />
-              <div className="absolute inset-0 grid place-items-center text-center">
-                <div>
-                  <div className="text-xl font-black leading-none tabular-nums sm:text-2xl">{speedKmh}</div>
-                  <div className="text-[9px] font-semibold uppercase text-slate-300">km/h</div>
+        {showRunHud && (
+          <div className="pointer-events-none absolute left-3 right-3 top-3 z-20 flex items-start justify-between gap-3 sm:left-6 sm:right-6 sm:top-6">
+            <div className="flex min-w-0 flex-wrap items-start gap-2 sm:gap-3">
+              <div className="min-w-24 rounded-lg border border-white/15 bg-slate-950/72 px-3 py-2 shadow-xl backdrop-blur-md sm:min-w-28">
+                <div className="text-[10px] font-black uppercase text-cyan-200">Score</div>
+                <div className="text-2xl font-black leading-none tabular-nums sm:text-3xl">{score}</div>
+              </div>
+              <div className="min-w-24 rounded-lg border border-white/15 bg-slate-950/72 px-3 py-2 shadow-xl backdrop-blur-md sm:min-w-28">
+                <div className="text-[10px] font-black uppercase text-amber-200">Best</div>
+                <div className="text-2xl font-black leading-none tabular-nums sm:text-3xl">{highScore}</div>
+              </div>
+              <div className="relative h-20 w-20 rounded-full border border-white/15 bg-slate-950/72 shadow-xl backdrop-blur-md sm:h-24 sm:w-24">
+                <div className="absolute inset-1 rounded-full" style={speedGaugeStyle} />
+                <div className="absolute inset-3 rounded-full bg-slate-950/95 shadow-inner" />
+                <div
+                  className="absolute left-1/2 top-1/2 h-[2px] w-[31%] origin-left rounded-full bg-amber-200 shadow-[0_0_12px_rgba(250,204,21,0.8)]"
+                  style={{ transform: `rotate(${-130 + speedPercent * 260}deg)` }}
+                />
+                <div className="absolute inset-0 grid place-items-center text-center">
+                  <div>
+                    <div className="text-xl font-black leading-none tabular-nums sm:text-2xl">{speedKmh}</div>
+                    <div className="text-[9px] font-semibold uppercase text-slate-300">km/h</div>
+                  </div>
                 </div>
               </div>
             </div>
+            <button
+              onClick={startOrRestart}
+              className="pointer-events-auto inline-flex items-center gap-2 rounded-lg border border-white/20 bg-white px-4 py-3 text-sm font-black text-slate-950 shadow-xl transition hover:bg-cyan-100 active:scale-95 sm:px-5"
+            >
+              <RotateCcw className="h-4 w-4" aria-hidden="true" />
+              {actionLabel}
+            </button>
           </div>
-          <button
-            onClick={startOrRestart}
-            className="pointer-events-auto rounded-lg border border-white/20 bg-white px-4 py-3 text-sm font-black text-slate-950 shadow-xl transition hover:bg-cyan-100 active:scale-95 sm:px-5"
-          >
-            {actionLabel}
-          </button>
-        </div>
+        )}
 
         {!started && (
-          <div className="absolute inset-0 z-10 grid place-items-center bg-slate-950/30 p-5 backdrop-blur-[2px]">
-            <div className="w-full max-w-xs rounded-lg border border-white/15 bg-slate-950/78 p-5 text-center shadow-2xl backdrop-blur-md">
-              <div className="mb-4 h-1.5 rounded-full bg-gradient-to-r from-cyan-300 via-amber-300 to-red-400" />
-              <button
-                onClick={(event) => { event.stopPropagation(); startOrRestart(); }}
-                className="w-full rounded-lg bg-white px-6 py-4 text-lg font-black text-slate-950 shadow-xl transition hover:bg-cyan-100 active:scale-95"
-              >
-                START RUN
-              </button>
-              <div className="mt-4 flex justify-center gap-2 text-xs font-semibold text-slate-300">
-                <span className="rounded-md border border-white/15 bg-white/10 px-2 py-1">A</span>
-                <span className="rounded-md border border-white/15 bg-white/10 px-2 py-1">D</span>
-                <span className="rounded-md border border-white/15 bg-white/10 px-2 py-1">SWIPE</span>
-              </div>
+          <div className="absolute inset-0 z-10 flex items-center justify-center bg-slate-950/36 p-4 backdrop-blur-[3px] sm:p-6">
+            <div className="grid max-h-[calc(100dvh-2rem)] w-full max-w-6xl gap-4 overflow-y-auto rounded-lg border border-white/14 bg-[#0b1220]/88 p-4 shadow-2xl shadow-black/45 backdrop-blur-xl md:grid-cols-[1.2fr_0.8fr] md:p-5">
+              <section className="flex flex-col justify-between rounded-lg border border-white/10 bg-gradient-to-br from-slate-950/74 via-[#111827]/62 to-cyan-950/28 p-4 sm:p-6 md:min-h-[420px]">
+                <div>
+                  <div className="flex items-center justify-between gap-3">
+                    <div>
+                      <div className="text-3xl font-black uppercase leading-none text-white sm:text-5xl">BlockRush</div>
+                      <div className="mt-1 text-sm font-black uppercase tracking-[0.32em] text-cyan-200">Highway</div>
+                    </div>
+                    <div className="hidden rounded-lg border border-amber-200/25 bg-amber-200/10 p-3 text-amber-100 sm:block">
+                      <Trophy className="h-7 w-7" aria-hidden="true" />
+                    </div>
+                  </div>
+
+                  <div className="mt-5 grid grid-cols-3 gap-2 sm:mt-7 sm:gap-3">
+                    <div className="rounded-lg border border-white/12 bg-white/8 p-2.5 sm:p-3">
+                      <div className="flex items-center gap-2 text-[10px] font-black uppercase text-cyan-200">
+                        <Gauge className="h-3.5 w-3.5" aria-hidden="true" />
+                        Best
+                      </div>
+                      <div className="mt-2 text-2xl font-black leading-none tabular-nums text-white sm:text-3xl">{highScore}</div>
+                    </div>
+                    <div className="rounded-lg border border-white/12 bg-white/8 p-2.5 sm:p-3">
+                      <div className="flex items-center gap-2 text-[10px] font-black uppercase text-amber-200">
+                        <Zap className="h-3.5 w-3.5" aria-hidden="true" />
+                        Last
+                      </div>
+                      <div className="mt-2 text-2xl font-black leading-none tabular-nums text-white sm:text-3xl">{lastScore}</div>
+                    </div>
+                    <div className="rounded-lg border border-white/12 bg-white/8 p-2.5 sm:p-3">
+                      <div className="flex items-center gap-2 text-[10px] font-black uppercase text-red-200">
+                        <Play className="h-3.5 w-3.5" aria-hidden="true" />
+                        Runs
+                      </div>
+                      <div className="mt-2 text-2xl font-black leading-none tabular-nums text-white sm:text-3xl">{gamesPlayed}</div>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="mt-5 sm:mt-8">
+                  <div className="grid gap-2 sm:grid-cols-3">
+                    {DRIVE_MODE_KEYS.map((modeKey) => (
+                      <button
+                        key={modeKey}
+                        type="button"
+                        onClick={() => updateSetting("driveMode", modeKey)}
+                        className={settingButtonClass(settings.driveMode === modeKey)}
+                      >
+                        {DRIVE_MODES[modeKey].label}
+                      </button>
+                    ))}
+                  </div>
+                  <button
+                    onClick={(event) => { event.stopPropagation(); startOrRestart(); }}
+                    className="mt-4 flex w-full items-center justify-center gap-3 rounded-lg bg-white px-6 py-4 text-lg font-black uppercase text-slate-950 shadow-xl transition hover:bg-cyan-100 active:scale-[0.99] sm:py-5"
+                  >
+                    <Play className="h-5 w-5 fill-current" aria-hidden="true" />
+                    Start Run
+                  </button>
+                  <div className="mt-3 hidden flex-wrap gap-2 text-xs font-black uppercase text-slate-200 sm:flex">
+                    <span className="rounded-md border border-white/15 bg-white/10 px-2.5 py-1.5">A</span>
+                    <span className="rounded-md border border-white/15 bg-white/10 px-2.5 py-1.5">D</span>
+                    <span className="rounded-md border border-white/15 bg-white/10 px-2.5 py-1.5">Swipe</span>
+                    <span className="rounded-md border border-white/15 bg-white/10 px-2.5 py-1.5">{driveMode.label}</span>
+                  </div>
+                </div>
+              </section>
+
+              <aside className="grid gap-4">
+                <section className="rounded-lg border border-white/12 bg-white/8 p-4">
+                  <div className="flex items-center justify-between gap-3">
+                    <div className="flex min-w-0 items-center gap-3">
+                      <div className="grid h-10 w-10 shrink-0 place-items-center rounded-lg border border-white/15 bg-slate-950/64 text-cyan-100">
+                        {accountIcon}
+                      </div>
+                      <div className="min-w-0">
+                        <div className="truncate text-sm font-black text-white">{accountLabel}</div>
+                        <div className="mt-1 flex items-center gap-1.5 text-[10px] font-black uppercase text-cyan-200">
+                          {syncIcon}
+                          {saveTarget}
+                        </div>
+                      </div>
+                    </div>
+                    <button
+                      onClick={currentUser ? handleSignOut : handleSignIn}
+                      disabled={authBusy}
+                      aria-label={currentUser ? "Sign out" : "Sign in with Google"}
+                      className="inline-flex shrink-0 items-center gap-2 rounded-lg border border-white/18 bg-white px-3 py-2 text-xs font-black uppercase text-slate-950 transition hover:bg-cyan-100 disabled:cursor-not-allowed disabled:opacity-60"
+                    >
+                      {currentUser ? <LogOut className="h-4 w-4" aria-hidden="true" /> : <GoogleIcon />}
+                      {accountAction}
+                    </button>
+                  </div>
+                  {authError && <div className="mt-3 rounded-md border border-red-300/20 bg-red-500/10 px-3 py-2 text-xs font-bold text-red-100">{authError}</div>}
+                </section>
+
+                <section className="rounded-lg border border-white/12 bg-white/8 p-4">
+                  <div className="mb-4 flex items-center gap-2 text-sm font-black uppercase text-white">
+                    <Settings className="h-4 w-4 text-cyan-200" aria-hidden="true" />
+                    Settings
+                  </div>
+                  <div className="grid gap-3">
+                    <div>
+                      <div className="mb-2 flex items-center gap-2 text-[10px] font-black uppercase text-slate-300">
+                        <Sparkles className="h-3.5 w-3.5" aria-hidden="true" />
+                        Visual FX
+                      </div>
+                      <div className="grid grid-cols-2 gap-2">
+                        <button type="button" onClick={() => updateSetting("visualEffects", true)} className={settingButtonClass(settings.visualEffects)}>On</button>
+                        <button type="button" onClick={() => updateSetting("visualEffects", false)} className={settingButtonClass(!settings.visualEffects)}>Low</button>
+                      </div>
+                    </div>
+                    <div>
+                      <div className="mb-2 flex items-center gap-2 text-[10px] font-black uppercase text-slate-300">
+                        <Cloud className="h-3.5 w-3.5" aria-hidden="true" />
+                        Weather
+                      </div>
+                      <div className="grid grid-cols-2 gap-2">
+                        <button type="button" onClick={() => updateSetting("weatherFx", true)} className={settingButtonClass(settings.weatherFx)}>Full</button>
+                        <button type="button" onClick={() => updateSetting("weatherFx", false)} className={settingButtonClass(!settings.weatherFx)}>Light</button>
+                      </div>
+                    </div>
+                    <div>
+                      <div className="mb-2 flex items-center gap-2 text-[10px] font-black uppercase text-slate-300">
+                        <Gamepad2 className="h-3.5 w-3.5" aria-hidden="true" />
+                        Touch
+                      </div>
+                      <div className="grid grid-cols-3 gap-2">
+                        {["left", "split", "right"].map((side) => (
+                          <button
+                            key={side}
+                            type="button"
+                            onClick={() => updateSetting("controlSide", side)}
+                            className={settingButtonClass(settings.controlSide === side)}
+                          >
+                            {side}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  </div>
+                </section>
+              </aside>
             </div>
           </div>
         )}
 
         {gameOver && (
-          <div className="absolute inset-0 z-10 grid place-items-center bg-red-950/28 p-5 backdrop-blur-[2px]">
-            <div className="w-full max-w-xs rounded-lg border border-red-300/25 bg-slate-950/84 p-5 text-center shadow-2xl backdrop-blur-md">
-              <div className="text-xs font-black uppercase text-red-200">Crash</div>
-              <div className="mt-1 text-5xl font-black leading-none tabular-nums">{score}</div>
-              <button
-                onClick={(event) => { event.stopPropagation(); startOrRestart(); }}
-                className="mt-5 w-full rounded-lg bg-white px-6 py-4 text-base font-black text-slate-950 shadow-xl transition hover:bg-red-100 active:scale-95"
-              >
-                RETRY
-              </button>
+          <div className="absolute inset-0 z-10 flex items-center justify-center bg-red-950/30 p-4 backdrop-blur-[3px]">
+            <div className="w-full max-w-2xl rounded-lg border border-red-200/20 bg-[#0b1220]/90 p-4 shadow-2xl shadow-black/45 backdrop-blur-xl sm:p-5">
+              <div className="grid gap-4 sm:grid-cols-[1fr_0.9fr]">
+                <section className="rounded-lg border border-white/12 bg-white/8 p-5">
+                  <div className="text-xs font-black uppercase text-red-200">Crash</div>
+                  <div className="mt-2 text-6xl font-black leading-none tabular-nums text-white">{score}</div>
+                  <div className="mt-4 grid grid-cols-2 gap-2">
+                    <div className="rounded-lg border border-white/12 bg-slate-950/50 p-3">
+                      <div className="text-[10px] font-black uppercase text-amber-200">Best</div>
+                      <div className="mt-1 text-2xl font-black leading-none tabular-nums">{highScore}</div>
+                    </div>
+                    <div className="rounded-lg border border-white/12 bg-slate-950/50 p-3">
+                      <div className="text-[10px] font-black uppercase text-cyan-200">Mode</div>
+                      <div className="mt-1 truncate text-base font-black uppercase">{driveMode.label}</div>
+                    </div>
+                  </div>
+                  <button
+                    onClick={(event) => { event.stopPropagation(); startOrRestart(); }}
+                    className="mt-4 flex w-full items-center justify-center gap-2 rounded-lg bg-white px-6 py-4 text-base font-black uppercase text-slate-950 shadow-xl transition hover:bg-red-100 active:scale-[0.99]"
+                  >
+                    <RotateCcw className="h-5 w-5" aria-hidden="true" />
+                    Retry
+                  </button>
+                  <button
+                    onClick={(event) => { event.stopPropagation(); openMainMenu(); }}
+                    className="mt-2 w-full rounded-lg border border-white/16 bg-white/8 px-6 py-3 text-xs font-black uppercase text-white transition hover:bg-white/14 active:scale-[0.99]"
+                  >
+                    Menu
+                  </button>
+                </section>
+
+                <aside className="rounded-lg border border-white/12 bg-white/8 p-4">
+                  <div className="flex items-center justify-between gap-3">
+                    <div className="flex min-w-0 items-center gap-3">
+                      <div className="grid h-10 w-10 shrink-0 place-items-center rounded-lg border border-white/15 bg-slate-950/64 text-cyan-100">
+                        {accountIcon}
+                      </div>
+                      <div className="min-w-0">
+                        <div className="truncate text-sm font-black text-white">{accountLabel}</div>
+                        <div className="mt-1 flex items-center gap-1.5 text-[10px] font-black uppercase text-cyan-200">
+                          {syncIcon}
+                          {saveTarget}
+                        </div>
+                      </div>
+                    </div>
+                    <button
+                      onClick={currentUser ? handleSignOut : handleSignIn}
+                      disabled={authBusy}
+                      aria-label={currentUser ? "Sign out" : "Sign in with Google"}
+                      className="inline-flex shrink-0 items-center gap-2 rounded-lg border border-white/18 bg-white px-3 py-2 text-xs font-black uppercase text-slate-950 transition hover:bg-cyan-100 disabled:cursor-not-allowed disabled:opacity-60"
+                    >
+                      {currentUser ? <LogOut className="h-4 w-4" aria-hidden="true" /> : <GoogleIcon />}
+                      {accountAction}
+                    </button>
+                  </div>
+                  <div className="mt-4 grid grid-cols-3 gap-2">
+                    {DRIVE_MODE_KEYS.map((modeKey) => (
+                      <button
+                        key={modeKey}
+                        type="button"
+                        onClick={() => updateSetting("driveMode", modeKey)}
+                        className={settingButtonClass(settings.driveMode === modeKey)}
+                      >
+                        {DRIVE_MODES[modeKey].label}
+                      </button>
+                    ))}
+                  </div>
+                  {authError && <div className="mt-3 rounded-md border border-red-300/20 bg-red-500/10 px-3 py-2 text-xs font-bold text-red-100">{authError}</div>}
+                </aside>
+              </div>
             </div>
           </div>
         )}
 
         {crashFlash && <div className="pointer-events-none absolute inset-0 z-30 bg-white/30" />}
 
-        <div className="pointer-events-none absolute bottom-5 left-5 z-20 hidden items-center gap-2 rounded-lg border border-white/10 bg-slate-950/64 px-3 py-2 text-xs font-semibold text-slate-300 backdrop-blur-md sm:flex">
-          <span className="rounded-md border border-white/15 bg-white/10 px-2 py-1 text-white">A</span>
-          <span className="rounded-md border border-white/15 bg-white/10 px-2 py-1 text-white">D</span>
-          <span className="rounded-md border border-white/15 bg-white/10 px-2 py-1 text-white">←</span>
-          <span className="rounded-md border border-white/15 bg-white/10 px-2 py-1 text-white">→</span>
-          <span className="rounded-md border border-white/15 bg-white/10 px-2 py-1 text-white">SPACE</span>
-        </div>
+        {showRunHud && (
+          <div className="pointer-events-none absolute bottom-5 left-5 z-20 hidden items-center gap-2 rounded-lg border border-white/10 bg-slate-950/64 px-3 py-2 text-xs font-semibold text-slate-300 backdrop-blur-md sm:flex">
+            <span className="rounded-md border border-white/15 bg-white/10 px-2 py-1 text-white">A</span>
+            <span className="rounded-md border border-white/15 bg-white/10 px-2 py-1 text-white">D</span>
+            <span className="grid h-7 w-7 place-items-center rounded-md border border-white/15 bg-white/10 text-white">
+              <ChevronLeft className="h-4 w-4" aria-hidden="true" />
+            </span>
+            <span className="grid h-7 w-7 place-items-center rounded-md border border-white/15 bg-white/10 text-white">
+              <ChevronRight className="h-4 w-4" aria-hidden="true" />
+            </span>
+            <span className="rounded-md border border-white/15 bg-white/10 px-2 py-1 text-white">SPACE</span>
+          </div>
+        )}
 
-        {started && !gameOver && (
-          <div className="absolute inset-x-0 bottom-5 z-20 flex items-end justify-between px-5 sm:hidden">
-            <div className="flex gap-3">
+        {showRunHud && (
+          <div className={`absolute inset-x-0 bottom-5 z-20 flex items-end px-5 sm:hidden ${mobileControlLayout}`}>
+            <div className={mobileButtonGroupClass}>
               <button
                 aria-label="Move left"
                 onPointerDown={handleLaneControl(-1)}
-                className="h-16 w-16 rounded-lg border border-white/18 bg-slate-950/70 text-4xl font-black text-white shadow-xl backdrop-blur-md active:scale-95"
+                className="grid h-16 w-16 place-items-center rounded-lg border border-white/18 bg-slate-950/70 text-white shadow-xl backdrop-blur-md active:scale-95"
               >
-                ‹
+                <ChevronLeft className="h-9 w-9" aria-hidden="true" />
               </button>
               <button
                 aria-label="Move right"
                 onPointerDown={handleLaneControl(1)}
-                className="h-16 w-16 rounded-lg border border-white/18 bg-slate-950/70 text-4xl font-black text-white shadow-xl backdrop-blur-md active:scale-95"
+                className="grid h-16 w-16 place-items-center rounded-lg border border-white/18 bg-slate-950/70 text-white shadow-xl backdrop-blur-md active:scale-95"
               >
-                ›
+                <ChevronRight className="h-9 w-9" aria-hidden="true" />
               </button>
             </div>
             <button
               onPointerDown={(event) => { event.preventDefault(); event.stopPropagation(); startOrRestart(); }}
-              className="h-14 rounded-lg border border-white/18 bg-white/90 px-5 text-xs font-black text-slate-950 shadow-xl backdrop-blur-md active:scale-95"
+              className={`absolute bottom-0 ${mobileResetLayout} h-14 rounded-lg border border-white/18 bg-white/90 px-5 text-xs font-black text-slate-950 shadow-xl backdrop-blur-md active:scale-95`}
             >
               RESET
             </button>
