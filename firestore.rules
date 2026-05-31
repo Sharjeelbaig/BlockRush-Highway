@@ -2,15 +2,37 @@ rules_version = '2';
 
 service cloud.firestore {
   match /databases/{database}/documents {
+
+    // ── Player progress (private, owner-only) ──────────────────────────
     match /players/{userId} {
-      allow read, write: if request.auth != null && request.auth.uid == userId;
+      allow read: if request.auth != null && request.auth.uid == userId;
+      allow write: if request.auth != null && request.auth.uid == userId
+        && request.resource.data.keys().hasOnly([
+             'displayName', 'email', 'highScore', 'lastScore',
+             'gamesPlayed', 'coins', 'totalCoins', 'lastRunCoins', 'updatedAt'
+           ])
+        && request.resource.data.highScore is int
+        && request.resource.data.highScore >= 0
+        && request.resource.data.coins is int
+        && request.resource.data.coins >= 0
+        && request.resource.data.gamesPlayed is int
+        && request.resource.data.gamesPlayed >= 0;
     }
 
+    // ── Public profiles (readable by any authed user, writable by owner) ─
     match /publicProfiles/{userId} {
       allow read: if request.auth != null;
-      allow write: if request.auth != null && request.auth.uid == userId;
+      allow write: if request.auth != null && request.auth.uid == userId
+        && request.resource.data.keys().hasOnly([
+             'uid', 'displayName', 'displayNameLower', 'playerTag',
+             'playerTagLower', 'photoURL', 'highScore', 'updatedAt'
+           ])
+        && request.resource.data.uid == request.auth.uid
+        && request.resource.data.highScore is int
+        && request.resource.data.highScore >= 0;
     }
 
+    // ── Friend requests ────────────────────────────────────────────────
     match /friendRequests/{requestId} {
       allow read: if request.auth != null &&
         (request.auth.uid == resource.data.fromUid || request.auth.uid == resource.data.toUid);
@@ -31,6 +53,7 @@ service cloud.firestore {
         );
     }
 
+    // ── Friendships ────────────────────────────────────────────────────
     match /friendships/{friendshipId} {
       allow read: if request.auth != null && request.auth.uid in resource.data.members;
       allow create: if request.auth != null &&
