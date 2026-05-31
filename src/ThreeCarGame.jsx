@@ -125,6 +125,72 @@ const DRIVE_MODES = {
 };
 const DRIVE_MODE_KEYS = ["cruise", "rush", "overdrive"];
 const COIN_POOL_SIZE = 8;
+
+// ── Engagement: Score milestones ───────────────────────────────────────
+const SCORE_MILESTONES = [100, 250, 500, 1000, 2500, 5000, 10000];
+
+// ── Engagement: Near-miss scoring ──────────────────────────────────────
+const NEAR_MISS_MARGIN = 0.35;
+
+// ── Engagement: Coin combo system ──────────────────────────────────────
+const COIN_COMBO_WINDOW_MS = 2000;
+const COIN_COMBO_MULTIPLIERS = [1, 1, 2, 3, 5];
+
+// ── Engagement: Daily streak ───────────────────────────────────────────
+const LOCAL_STREAK_KEY = "blockrush.streak";
+const LOCAL_LAST_PLAY_DATE_KEY = "blockrush.lastPlayDate";
+const LOCAL_DAILY_BONUS_KEY = "blockrush.dailyBonusClaimed";
+const DAILY_BONUS_SCHEDULE = [5, 10, 20, 20, 50, 50, 100];
+
+// ── Engagement: Car colors (Garage) ────────────────────────────────────
+const LOCAL_UNLOCKED_COLORS_KEY = "blockrush.unlockedColors";
+const LOCAL_SELECTED_COLOR_KEY = "blockrush.selectedColor";
+const CAR_COLORS = [
+  { id: "midnight_blue", name: "Midnight Blue", hex: 0x152c98, price: 0 },
+  { id: "crimson_red", name: "Crimson Red", hex: 0xb91c1c, price: 150 },
+  { id: "emerald_green", name: "Emerald", hex: 0x047857, price: 200 },
+  { id: "sunset_orange", name: "Sunset", hex: 0xea580c, price: 300 },
+  { id: "royal_purple", name: "Royal Purple", hex: 0x7c3aed, price: 400 },
+  { id: "arctic_white", name: "Arctic White", hex: 0xe2e8f0, price: 500 },
+  { id: "stealth_black", name: "Stealth Black", hex: 0x0f172a, price: 600 },
+  { id: "gold_rush", name: "Gold Rush", hex: 0xd97706, price: 1000 },
+];
+
+function readUnlockedColors() {
+  if (typeof window === "undefined") return ["midnight_blue"];
+  try {
+    const stored = JSON.parse(window.localStorage.getItem(LOCAL_UNLOCKED_COLORS_KEY) || "null");
+    return Array.isArray(stored) ? stored : ["midnight_blue"];
+  } catch { return ["midnight_blue"]; }
+}
+function writeUnlockedColors(colors) {
+  if (typeof window === "undefined") return;
+  window.localStorage.setItem(LOCAL_UNLOCKED_COLORS_KEY, JSON.stringify(colors));
+}
+function readSelectedColor() {
+  if (typeof window === "undefined") return "midnight_blue";
+  return window.localStorage.getItem(LOCAL_SELECTED_COLOR_KEY) || "midnight_blue";
+}
+function writeSelectedColor(colorId) {
+  if (typeof window === "undefined") return;
+  window.localStorage.setItem(LOCAL_SELECTED_COLOR_KEY, colorId);
+}
+function readStreak() {
+  if (typeof window === "undefined") return { streak: 0, lastPlayDate: "" };
+  return {
+    streak: readLocalNumber(LOCAL_STREAK_KEY),
+    lastPlayDate: window.localStorage.getItem(LOCAL_LAST_PLAY_DATE_KEY) || "",
+  };
+}
+function getToday() {
+  return new Date().toISOString().slice(0, 10);
+}
+function getYesterday() {
+  const d = new Date();
+  d.setDate(d.getDate() - 1);
+  return d.toISOString().slice(0, 10);
+}
+
 const WEATHER_PRESETS = {
   clear_noon: {
     skyTop: new THREE.Color(0x3b9fe0),
@@ -702,6 +768,193 @@ function ShopButton({ coins, onOpen }) {
   );
 }
 
+function MilestoneBanner({ milestone }) {
+  if (!milestone) return null;
+  return (
+    <div className="pointer-events-none absolute left-1/2 top-1/3 z-40 -translate-x-1/2 -translate-y-1/2 animate-[milestoneIn_0.5s_ease-out]">
+      <div className="flex flex-col items-center gap-1">
+        <div className="rounded-full border border-amber-300/40 bg-gradient-to-r from-amber-500/20 via-yellow-400/30 to-amber-500/20 px-6 py-2 backdrop-blur-md">
+          <div className="text-[10px] font-black uppercase tracking-widest text-amber-200">Milestone</div>
+          <div className="text-4xl font-black tabular-nums text-white drop-shadow-[0_0_24px_rgba(251,191,36,0.6)] sm:text-5xl">{milestone.toLocaleString()}</div>
+        </div>
+        <div className="flex gap-1">
+          {[...Array(5)].map((_, i) => (
+            <span key={i} className="inline-block h-1 w-6 rounded-full bg-gradient-to-r from-amber-400 to-yellow-300 opacity-80" style={{ animationDelay: `${i * 80}ms` }} />
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function NearMissPopup({ popups }) {
+  if (!popups.length) return null;
+  return (
+    <div className="pointer-events-none absolute bottom-32 left-1/2 z-30 -translate-x-1/2 grid gap-1">
+      {popups.map((popup) => (
+        <div key={popup.id} className="animate-[floatUp_1.2s_ease-out_forwards] whitespace-nowrap text-center">
+          <span className="rounded-full border border-cyan-300/40 bg-cyan-500/20 px-3 py-1 text-sm font-black text-cyan-100 backdrop-blur-sm">
+            ⚡ CLOSE! +{popup.bonus}{popup.streak > 1 ? ` (${popup.streak}x)` : ""}
+          </span>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function ComboCounter({ count }) {
+  if (count < 1) return null;
+  const multiplier = COIN_COMBO_MULTIPLIERS[Math.min(count, COIN_COMBO_MULTIPLIERS.length - 1)] || 1;
+  return (
+    <div className="pointer-events-none animate-[comboPopIn_0.3s_ease-out] rounded-lg border border-amber-300/30 bg-gradient-to-r from-amber-500/20 to-yellow-400/20 px-3 py-1.5 backdrop-blur-md">
+      <div className="text-[9px] font-black uppercase tracking-wider text-amber-300">Combo</div>
+      <div className="flex items-center gap-1.5">
+        <span className="text-2xl font-black tabular-nums text-amber-100">{multiplier}x</span>
+        <div className="flex gap-0.5">
+          {[...Array(Math.min(count, 5))].map((_, i) => (
+            <span key={i} className="inline-block h-2 w-2 rounded-full bg-amber-400 shadow-[0_0_6px_rgba(251,191,36,0.7)]" />
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function StreakBadge({ streak, onClaim, showBonus, bonusAmount }) {
+  return (
+    <div className="relative">
+      <div className="flex items-center gap-2 rounded-lg border border-orange-300/20 bg-gradient-to-r from-orange-500/10 to-red-500/10 px-3 py-2">
+        <span className="text-xl" role="img" aria-label="streak">🔥</span>
+        <div>
+          <div className="text-[10px] font-black uppercase text-orange-200">
+            {streak > 0 ? `${streak} Day Streak` : "Start a Streak!"}
+          </div>
+          <div className="text-xs font-bold text-orange-100/70">
+            {streak > 0 ? "Play daily to keep it going" : "Play today to begin"}
+          </div>
+        </div>
+        {streak > 0 && (
+          <span className="ml-auto text-2xl font-black tabular-nums text-orange-200">{streak}</span>
+        )}
+      </div>
+      {showBonus && (
+        <div className="absolute -top-2 left-1/2 z-10 -translate-x-1/2 animate-[floatUp_3s_ease-out_forwards]">
+          <div className="whitespace-nowrap rounded-full border border-amber-300/50 bg-gradient-to-r from-amber-600/90 to-yellow-500/90 px-4 py-1.5 text-sm font-black text-white shadow-lg shadow-amber-500/30">
+            🎁 Daily Bonus: +{bonusAmount} coins!
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function LeaderboardPanel({ leaderboard, currentUser, playerRank }) {
+  if (!leaderboard.length) return null;
+  return (
+    <section className="rounded-lg border border-white/12 bg-white/8 p-4">
+      <div className="mb-3 flex items-center gap-2 text-sm font-black uppercase text-white">
+        <Trophy className="h-4 w-4 text-amber-200" aria-hidden="true" />
+        Leaderboard
+      </div>
+      {playerRank && (
+        <div className="mb-3 rounded-md border border-cyan-300/20 bg-cyan-500/10 px-3 py-2 text-xs font-black text-cyan-100">
+          Your Rank: #{playerRank}
+        </div>
+      )}
+      <div className="grid max-h-64 gap-1 overflow-y-auto pr-1">
+        {leaderboard.map((entry, index) => {
+          const isCurrentUser = currentUser && entry.uid === currentUser.uid;
+          const rankEmoji = index === 0 ? "🥇" : index === 1 ? "🥈" : index === 2 ? "🥉" : null;
+          return (
+            <div
+              key={entry.uid}
+              className={`flex items-center gap-2 rounded-md px-2.5 py-1.5 text-xs font-bold transition ${
+                isCurrentUser
+                  ? "border border-cyan-300/25 bg-cyan-500/15 text-cyan-50"
+                  : "border border-transparent text-slate-200 hover:bg-white/5"
+              }`}
+            >
+              <span className="w-6 shrink-0 text-center font-black tabular-nums text-slate-400">
+                {rankEmoji || `${index + 1}`}
+              </span>
+              <span className="min-w-0 flex-1 truncate">{entry.displayName || "Player"}</span>
+              <span className="shrink-0 font-black tabular-nums text-white">{(entry.highScore || 0).toLocaleString()}</span>
+            </div>
+          );
+        })}
+      </div>
+    </section>
+  );
+}
+
+function GaragePanel({ coins, unlockedColors, selectedColor, onSelectColor, onPurchaseColor }) {
+  return (
+    <section className="rounded-lg border border-white/12 bg-white/8 p-4">
+      <div className="mb-1 flex items-center justify-between">
+        <div className="flex items-center gap-2 text-sm font-black uppercase text-white">
+          <ShoppingBag className="h-4 w-4 text-amber-200" aria-hidden="true" />
+          Garage
+        </div>
+        <span className="flex items-center gap-1 text-sm font-black tabular-nums text-amber-100">
+          <CoinIcon className="h-4 w-4" />
+          {coins}
+        </span>
+      </div>
+      <div className="mb-3 text-[10px] font-bold uppercase text-slate-400">Select your paint</div>
+      <div className="grid grid-cols-4 gap-2">
+        {CAR_COLORS.map((color) => {
+          const isUnlocked = unlockedColors.includes(color.id);
+          const isSelected = selectedColor === color.id;
+          const canAfford = coins >= color.price;
+          const hexStr = `#${color.hex.toString(16).padStart(6, "0")}`;
+          return (
+            <button
+              key={color.id}
+              type="button"
+              onClick={() => {
+                if (isUnlocked) onSelectColor(color.id);
+                else if (canAfford) onPurchaseColor(color.id, color.price);
+              }}
+              disabled={!isUnlocked && !canAfford}
+              className={`group relative grid place-items-center rounded-lg border p-2 transition ${
+                isSelected
+                  ? "border-cyan-300 bg-cyan-500/15 shadow-[0_0_12px_rgba(103,232,249,0.2)]"
+                  : isUnlocked
+                    ? "border-white/14 bg-white/8 hover:border-white/25 hover:bg-white/12"
+                    : canAfford
+                      ? "border-amber-300/20 bg-amber-500/8 hover:bg-amber-500/14"
+                      : "border-white/8 bg-white/4 opacity-50"
+              }`}
+              title={`${color.name}${!isUnlocked ? ` — ${color.price} coins` : ""}`}
+            >
+              <div
+                className="h-7 w-7 rounded-full border-2 shadow-inner"
+                style={{
+                  backgroundColor: hexStr,
+                  borderColor: isSelected ? "#67e8f9" : "rgba(255,255,255,0.2)",
+                  boxShadow: isSelected ? `0 0 10px ${hexStr}88` : undefined,
+                }}
+              />
+              {isSelected && (
+                <Check className="absolute -right-1 -top-1 h-4 w-4 rounded-full bg-cyan-400 p-0.5 text-slate-950" />
+              )}
+              {!isUnlocked && (
+                <div className="mt-1 flex items-center gap-0.5 text-[9px] font-black tabular-nums text-amber-200">
+                  <CoinIcon className="h-3 w-3" />
+                  {color.price}
+                </div>
+              )}
+              <div className="pointer-events-none absolute -bottom-6 left-1/2 z-50 -translate-x-1/2 whitespace-nowrap rounded bg-slate-950/95 px-2 py-0.5 text-[9px] font-bold text-white opacity-0 shadow-lg transition group-hover:opacity-100">
+                {color.name}
+              </div>
+            </button>
+          );
+        })}
+      </div>
+    </section>
+  );
+}
+
 function FriendsPanel({ currentUser, authBusy, onSignIn, onDialog }) {
   const [searchTerm, setSearchTerm] = useState("");
   const [results, setResults] = useState([]);
@@ -898,6 +1151,12 @@ export default function ThreeCarGame() {
   const coinBalanceRef = useRef(readLocalNumber(LOCAL_COINS_KEY));
   const totalCoinsRef = useRef(Math.max(readLocalNumber(LOCAL_TOTAL_COINS_KEY), readLocalNumber(LOCAL_COINS_KEY)));
   const coinPopupIdRef = useRef(0);
+  const lastMilestoneRef = useRef(0);
+  const nearMissStreakRef = useRef(0);
+  const nearMissIdRef = useRef(0);
+  const coinComboRef = useRef({ count: 0, lastTime: 0 });
+  const runStatsRef = useRef({ obstaclesDodged: 0, nearMisses: 0, maxCombo: 0 });
+  const playerBodyMaterialRef = useRef(null);
   const settingsRef = useRef(readGameSettings());
   const gameRef = useRef({
     started: false,
@@ -938,6 +1197,20 @@ export default function ThreeCarGame() {
   const [authBusy, setAuthBusy] = useState(true);
   const [authError, setAuthError] = useState("");
   const [saveTarget, setSaveTarget] = useState("Local");
+
+  // ── Engagement state ────────────────────────────────────────────────
+  const [milestone, setMilestone] = useState(null);
+  const [nearMissPopups, setNearMissPopups] = useState([]);
+  const [comboCount, setComboCount] = useState(0);
+  const [streak, setStreak] = useState(() => readStreak().streak);
+  const [showDailyBonus, setShowDailyBonus] = useState(false);
+  const [dailyBonusAmount, setDailyBonusAmount] = useState(0);
+  const [leaderboard, setLeaderboard] = useState([]);
+  const [playerRank, setPlayerRank] = useState(null);
+  const [runStats, setRunStats] = useState({ obstaclesDodged: 0, nearMisses: 0, maxCombo: 0 });
+  const [isNewHighScore, setIsNewHighScore] = useState(false);
+  const [unlockedColors, setUnlockedColors] = useState(readUnlockedColors);
+  const [selectedColor, setSelectedColor] = useState(readSelectedColor);
 
   const awardCoins = useCallback((amount) => {
     const safeAmount = Math.max(0, Math.floor(amount));
@@ -2594,6 +2867,17 @@ export default function ThreeCarGame() {
         if (nextUiScore !== state.lastUiScore) {
           state.lastUiScore = nextUiScore;
           setScore(nextUiScore);
+
+          // ── Engagement: milestone check ──
+          for (let mi = SCORE_MILESTONES.length - 1; mi >= 0; mi--) {
+            const ms = SCORE_MILESTONES[mi];
+            if (nextUiScore >= ms && lastMilestoneRef.current < ms) {
+              lastMilestoneRef.current = ms;
+              setMilestone(ms);
+              window.setTimeout(() => setMilestone(null), 2200);
+              break;
+            }
+          }
         }
         const nextUiSpeed = speedToKmh(state.speed);
         if (nextUiSpeed !== state.lastUiSpeed) {
@@ -2615,6 +2899,24 @@ export default function ThreeCarGame() {
           if (!obstacle.userData.passed && obstacle.position.z > player.position.z) {
             obstacle.userData.passed = true;
             state.score += 25 * driveMode.scoreMultiplier;
+            runStatsRef.current.obstaclesDodged += 1;
+
+            // ── Engagement: near-miss detection ──
+            const lateralDist = Math.abs(player.position.x - obstacle.position.x);
+            const collisionWidth = player.userData.halfW + obstacle.userData.halfW;
+            if (lateralDist < collisionWidth + NEAR_MISS_MARGIN && lateralDist >= collisionWidth * 0.85) {
+              nearMissStreakRef.current += 1;
+              const streakBonus = Math.min(nearMissStreakRef.current, 5);
+              const nearMissScore = 15 * streakBonus;
+              state.score += nearMissScore;
+              runStatsRef.current.nearMisses += 1;
+              const nmId = nearMissIdRef.current + 1;
+              nearMissIdRef.current = nmId;
+              setNearMissPopups(prev => [...prev.slice(-2), { id: nmId, bonus: nearMissScore, streak: streakBonus }]);
+              window.setTimeout(() => setNearMissPopups(prev => prev.filter(p => p.id !== nmId)), 1200);
+            } else {
+              nearMissStreakRef.current = 0;
+            }
           }
           if (obstacle.position.z > 14) {
             obstacle.position.z = -driveMode.resetDepth - Math.random() * 34;
@@ -2625,10 +2927,14 @@ export default function ThreeCarGame() {
             state.gameOver = true;
             const finalScore = Math.floor(state.score);
             const finalRunCoins = runCoinsRef.current;
+            const isNewHS = finalScore > readLocalHighScore();
             crashBlur = BLUR_TUNING.crashKick;
             setScore(finalScore);
             setGameOver(true);
             setCrashFlash(true);
+            setIsNewHighScore(isNewHS);
+            setRunStats({ ...runStatsRef.current });
+            setComboCount(0);
             saveRunRef.current?.(finalScore, finalRunCoins);
             if (crashFlashTimer) window.clearTimeout(crashFlashTimer);
             crashFlashTimer = window.setTimeout(() => setCrashFlash(false), 180);
@@ -2645,7 +2951,21 @@ export default function ThreeCarGame() {
               Math.abs(coin.object.position.z - player.position.z) < 0.95
             ) {
               coin.collected = true;
-              const reward = getCoinReward(driveMode);
+              // ── Engagement: coin combo ──
+              const comboNow = performance.now();
+              const combo = coinComboRef.current;
+              if (comboNow - combo.lastTime < COIN_COMBO_WINDOW_MS) {
+                combo.count = Math.min(combo.count + 1, COIN_COMBO_MULTIPLIERS.length - 1);
+              } else {
+                combo.count = 0;
+              }
+              combo.lastTime = comboNow;
+              const comboMultiplier = COIN_COMBO_MULTIPLIERS[combo.count] || 1;
+              const reward = getCoinReward(driveMode) * comboMultiplier;
+              setComboCount(combo.count);
+              if (combo.count > runStatsRef.current.maxCombo) {
+                runStatsRef.current.maxCombo = combo.count;
+              }
               triggerCoinBurst(coin.object.position);
               awardCoinsRef.current?.(reward);
               resetCoin(coin, i + COIN_POOL_SIZE);
